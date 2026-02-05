@@ -2,61 +2,49 @@
 import { useEffect, useRef } from "react";
 import Artplayer from "artplayer";
 import Hls from "hls.js";
-import dashjs from "dashjs";
+// Shaka Player Import
+import shaka from "shaka-player/dist/shaka-player.ui.js";
 
 export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
 
   useEffect(() => {
-    // Destroy previous instance to prevent memory leaks
+    // আগের ইন্সট্যান্স থাকলে ধ্বংস করা
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
-
-    // Determine if it is likely a live stream or not to adjust UI
-    const isLiveStream = option.isLive || true; 
 
     const art = new Artplayer({
       ...option,
       container: artRef.current,
       
-      // === ALL FEATURES ENABLED (Like ExoPlayer) ===
+      // === UI & FEATURES (ArtPlayer) ===
       volume: 1,
-      isLive: isLiveStream,
+      isLive: true,
       muted: false,
       autoplay: true,
       autoPlayback: true,
-      
-      // UI Controls
-      pip: true,            // Picture in Picture
+      pip: true,
       autoSize: true,
-      autoMini: true,       // Mini player on scroll
-      screenshot: true,     // Camera icon
-      setting: true,        // Settings gear
-      loop: false,          // Live stream usually shouldn't loop
-      flip: true,           // Flip video
-      playbackRate: true,   // Speed control (0.5x, 1x, 2x)
-      aspectRatio: true,    // 16:9, 4:3 fit
+      autoMini: true,
+      screenshot: true,
+      setting: true,
+      loop: false,
+      flip: true,
+      playbackRate: true,
+      aspectRatio: true,
       fullscreen: true,
       fullscreenWeb: true,
-      subtitleOffset: true,
-      
-      // Mobile Specific (ExoPlayer Feel)
-      miniProgressBar: true, 
-      lock: true,           // Lock screen button (Important)
+      miniProgressBar: true,
+      lock: true,           // Lock Screen Feature
       fastForward: true,    // Double tap to seek
-      autoOrientation: true,// Auto rotate on mobile
-      airplay: true,        // Cast support
-      
-      // Theme
+      autoOrientation: true,
+      airplay: true,
       theme: "#ff0055",
-      icons: {
-        state: '<img width="150" heigth="150" src="https://artplayer.org/assets/img/state.svg">',
-        indicator: '<img width="16" heigth="16" src="https://artplayer.org/assets/img/indicator.svg">',
-      },
 
-      // === CUSTOM LOADER ===
+      // === ENGINE CONFIGURATION ===
       customType: {
+        // HLS এর জন্য
         m3u8: function (video, url, art) {
           if (Hls.isSupported()) {
             const hls = new Hls();
@@ -68,59 +56,103 @@ export default function Player({ option, style, getInstance }) {
             video.src = url;
           }
         },
-        
-        // === DASH FIX FOR LOADING & TIME BUG ===
-        dash: function (video, url, art) {
-           const dPlayer = dashjs.MediaPlayer().create();
-           
-           // 1. Configure to ignore some errors and force play
-           dPlayer.updateSettings({
-                'streaming': {
-                    'delay': {
-                        'liveDelay': 3 // Keep live delay low
-                    },
-                    'buffer': {
-                        'stableBufferTime': 5 // Stable buffer
-                    }
-                }
-           });
 
-           // 2. ClearKey Setup (MUST BE BEFORE INITIALIZE)
-           // We handle both lowercase 'clearkey' and Uppercase 'Clearkey'
-           const keyData = option.clearkey || option.Clearkey;
-           
-           if (keyData) {
-             // Create the protection data object explicitly
-             const protectionData = {
-               "org.w3.clearkey": {
-                 "clearkeys": keyData
-               }
-             };
-             dPlayer.setProtectionData(protectionData);
-             console.log("ClearKey Set:", protectionData);
+        // DASH এর জন্য Shaka Player (Direct Load)
+        dash: async function (video, url, art) {
+           // 1. Shaka সাপোর্ট চেক
+           shaka.polyfill.installAll();
+           if (!shaka.Player.isBrowserSupported()) {
+               art.notice.show = "Browser not supported for Shaka Player";
+               return;
            }
 
-           // 3. Initialize
-           dPlayer.initialize(video, url, true); // AutoPlay = true
+           // 2. Shaka Player তৈরি (ArtPlayer এর ভিডিও এলিমেন্টের ভেতর)
+           const player = new shaka.Player(video);
 
-           // 4. Fix for Time Bug (Infinite Time)
-           // If it's a live stream, sometimes the duration gets messed up. 
-           // We force the player to recognize it as live.
-           dPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
-             dPlayer.play();
-             if(dPlayer.isDynamic()) {
-                 art.notice.show = "Live Stream Connected";
-             }
-           });
-           
-           // Error Logging
-           dPlayer.on(dashjs.MediaPlayer.events.ERROR, (e) => {
-               console.error("DASH Error:", e);
-               art.notice.show = "Stream Error: " + e.error + ". Try switching server.";
+           // 3. কনফিগারেশন (DRM & Performance)
+           const config = {
+               streaming: {
+                   bufferingGoal: 15, // ১৫ সেকেন্ড বাফার
+                   lowLatencyMode: true, // লাইভ স্ট্রিমের জন্য
+               }
+           };
+
+           // ClearKey সেটআপ
+           const keyData = option.clearkey || option.Clearkey;
+           if (keyData) {
+               config.drm = {
+                   clearKeys: keyData // ডাইরেক্ট অবজেক্ট পাস
+               };
+           }
+
+           player.configure(config);
+
+           // 4. এরর হ্যান্ডলিং
+           player.addEventListener('error', (event) => {
+               console.error('Shaka Error:', event.detail);
+               art.notice.show = "Stream Error: " + event.detail.code;
            });
 
-           art.dash = dPlayer;
-           art.on('destroy', () => dPlayer.reset());
+           // 5. লোড করা
+           try {
+               await player.load(url);
+               console.log('Shaka: Video Loaded Successfully');
+               
+               // === কোয়ালিটি কন্ট্রোল (ArtPlayer Settings এ অ্যাড করা) ===
+               // লোড হওয়ার পর ট্র্যাকগুলো বের করা
+               const tracks = player.getVariantTracks();
+               // শুধু ভিডিও ট্র্যাক ফিল্টার করা
+               const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
+               
+               // ডুপ্লিকেট রিমুভ করা (হাইট অনুযায়ী)
+               const uniqueTracks = [];
+               const map = new Map();
+               for (const item of videoTracks) {
+                   if(!map.has(item.height)){
+                       map.set(item.height, true);
+                       uniqueTracks.push(item);
+                   }
+               }
+               // বড় থেকে ছোট সাজানো
+               uniqueTracks.sort((a, b) => b.height - a.height);
+
+               if (uniqueTracks.length > 0) {
+                   const levels = uniqueTracks.map((t) => ({
+                       html: t.height + 'p',
+                       id: t.id,
+                   }));
+                   levels.push({ html: 'Auto', id: -1, default: true });
+
+                   // ArtPlayer এর সেটিংসে যোগ করা
+                   art.setting.add({
+                        html: 'Quality',
+                        width: 150,
+                        tooltip: 'Auto',
+                        selector: levels,
+                        onSelect: function (item) {
+                            // Shaka তে কোয়ালিটি চেঞ্জ করা
+                            if (item.id === -1) {
+                                player.configure({ abr: { enabled: true } });
+                            } else {
+                                player.configure({ abr: { enabled: false } });
+                                const track = tracks.find(t => t.id === item.id);
+                                if (track) {
+                                    player.selectVariantTrack(track, true); 
+                                }
+                            }
+                            return item.html;
+                        },
+                    });
+               }
+
+           } catch (e) {
+               console.error('Shaka Load Error:', e);
+               art.notice.show = "Failed to load: " + e.message;
+           }
+
+           // প্লেয়ার ডেস্ট্রয় হলে শাকা প্লেয়ার ক্লিন করা
+           art.shaka = player;
+           art.on('destroy', () => player.destroy());
         }
       },
     });
