@@ -8,6 +8,7 @@ export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
 
   useEffect(() => {
+    // 1. Clean up previous instance
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
@@ -16,8 +17,8 @@ export default function Player({ option, style, getInstance }) {
       ...option,
       container: artRef.current,
       volume: 1,
-      isLive: false, // Trick: Set false to FORCE show Seekbar/Progress bar
-      muted: false,
+      isLive: false, // Force seekbar
+      muted: true,   // TRICK: Start muted to bypass browser autoplay block
       autoplay: true,
       pip: true,
       autoSize: true,
@@ -51,14 +52,12 @@ export default function Player({ option, style, getInstance }) {
           }
         },
         dash: function (video, url, art) {
+           // TRICK: Reset protection data explicitly before init
            const dPlayer = dashjs.MediaPlayer().create();
            
-           // Initialize first
-           dPlayer.initialize(video, url, true);
-           
-           // STRICT ClearKey Setup
+           // ClearKey Setup Logic
+           // Note: Clearkey setup MUST happen before initialization for some streams
            if (option.clearkey) {
-             // Ensure clearkey object is valid
              const protectionData = {
                "org.w3.clearkey": {
                  "clearkeys": option.clearkey
@@ -66,6 +65,15 @@ export default function Player({ option, style, getInstance }) {
              };
              dPlayer.setProtectionData(protectionData);
            }
+
+           dPlayer.initialize(video, url, true); // AutoPlay = true
+
+           // TRICK: Force start if stuck
+           dPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+             dPlayer.play();
+             // Unmute after a short delay if user interacts, or let user unmute
+             // art.muted = false; // Uncomment if you want to risk it
+           });
 
            art.dash = dPlayer;
            art.on('destroy', () => dPlayer.reset());
