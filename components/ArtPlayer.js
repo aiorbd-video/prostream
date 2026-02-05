@@ -8,7 +8,6 @@ export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
 
   useEffect(() => {
-    // Destroy old instance if exists
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
@@ -17,7 +16,7 @@ export default function Player({ option, style, getInstance }) {
       ...option,
       container: artRef.current,
       volume: 1,
-      isLive: true, // Live UI toggle
+      isLive: false, // Trick: Set false to FORCE show Seekbar/Progress bar
       muted: false,
       autoplay: true,
       pip: true,
@@ -39,89 +38,37 @@ export default function Player({ option, style, getInstance }) {
       airplay: true,
       theme: "#ff0055",
       
-      // Control Bar Settings to force Seekbar
-      controls: [
-        {
-          name: 'live-badge',
-          position: 'right',
-          html: '<span style="color:red; font-weight:bold; font-size:12px;">● LIVE</span>',
-        }
-      ],
-
       customType: {
         m3u8: function (video, url, art) {
           if (Hls.isSupported()) {
             const hls = new Hls();
             hls.loadSource(url);
             hls.attachMedia(video);
-            
-            // Quality Switching for HLS
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-              if(hls.levels.length > 1) {
-                const levels = hls.levels.map((level, index) => ({
-                    html: level.height + 'p',
-                    level: index,
-                }));
-                // Add Auto
-                levels.push({ html: 'Auto', level: -1, default: true });
-                
-                art.setting.add({
-                    html: 'Quality',
-                    width: 150,
-                    tooltip: 'Auto',
-                    selector: levels,
-                    onSelect: function (item) {
-                        hls.currentLevel = item.level;
-                        return item.html;
-                    },
-                });
-              }
-            });
             art.hls = hls;
+            art.on('destroy', () => hls.destroy());
           } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
             video.src = url;
           }
         },
         dash: function (video, url, art) {
            const dPlayer = dashjs.MediaPlayer().create();
+           
+           // Initialize first
            dPlayer.initialize(video, url, true);
            
-           // FIXED: ClearKey Implementation
+           // STRICT ClearKey Setup
            if (option.clearkey) {
-             dPlayer.setProtectionData({
+             // Ensure clearkey object is valid
+             const protectionData = {
                "org.w3.clearkey": {
                  "clearkeys": option.clearkey
                }
-             });
+             };
+             dPlayer.setProtectionData(protectionData);
            }
 
-           // Quality Switching for DASH
-           dPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
-              const bitrates = dPlayer.getBitrateInfoListFor("video");
-              if (bitrates.length > 1) {
-                  const levels = bitrates.map((b, i) => ({
-                      html: b.height + 'p',
-                      index: i
-                  }));
-                  levels.push({ html: 'Auto', index: -1, default: true });
-
-                  art.setting.add({
-                    html: 'Quality',
-                    width: 150,
-                    tooltip: 'Auto',
-                    selector: levels,
-                    onSelect: function (item) {
-                        dPlayer.setAutoSwitchQualityFor("video", item.index === -1);
-                        if (item.index !== -1) {
-                            dPlayer.setQualityFor("video", item.index);
-                        }
-                        return item.html;
-                    },
-                });
-              }
-           });
-           
            art.dash = dPlayer;
+           art.on('destroy', () => dPlayer.reset());
         }
       },
     });
@@ -135,7 +82,7 @@ export default function Player({ option, style, getInstance }) {
         art.destroy(false);
       }
     };
-  }, [option.url]); 
+  }, [option.url, option.clearkey]); 
 
   return <div ref={artRef} style={style} />;
 }
