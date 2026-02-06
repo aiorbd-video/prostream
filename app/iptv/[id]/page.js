@@ -21,7 +21,7 @@ function IPTVContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
-  // URL থেকে প্যারামিটার ধরা
+  // URL Params
   const playUrl = searchParams.get('play');
   const playName = searchParams.get('name');
   const playLogo = searchParams.get('logo');
@@ -33,7 +33,7 @@ function IPTVContent() {
   const [channels, setChannels] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // ১. ফায়ারবেজ থেকে প্লেলিস্ট ডিটেইলস আনা
+  // 1. Fetch Playlist Info
   useEffect(() => {
     const chRef = ref(db, `iptv/${id}`);
     get(chRef).then((snapshot) => {
@@ -47,15 +47,14 @@ function IPTVContent() {
     });
   }, [id]);
 
-  // ২. ডাইরেক্ট M3U লোড (প্রক্সি ছাড়া) - আপনার রিকোয়ারমেন্ট অনুযায়ী
+  // 2. Fetch M3U (Direct -> Proxy Fallback)
   const fetchM3U = async (data) => {
     try {
       const res = await fetch(data.url);
       const text = await res.text();
       parseM3U(text);
     } catch (err) {
-      console.error("Direct fetch failed:", err);
-      // ফেইল হলে প্রক্সি দিয়ে একবার ট্রাই করবে ডাটা আনার জন্য (Backup)
+      console.error("Direct fetch failed, trying fallback...");
       try {
          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(data.url)}`;
          const res2 = await fetch(proxyUrl);
@@ -92,28 +91,27 @@ function IPTVContent() {
     setLoading(false);
   };
 
-  // ৩. চ্যানেল প্লে হ্যান্ডলার (Replace ব্যবহার করা যাতে হিস্ট্রি ক্লিন থাকে)
+  // --- 3. FIX: SCROLL POSITION HOLDER ---
   const handlePlay = (ch) => {
     const params = new URLSearchParams(searchParams);
     params.set('play', ch.url);
     params.set('name', ch.name);
     params.set('logo', ch.logo || "");
     
-    // প্রক্সিগুলো URL এ পাস করা হচ্ছে
     if (playlistInfo.proxy) params.set('p1', playlistInfo.proxy);
     if (playlistInfo.proxy1) params.set('p2', playlistInfo.proxy1);
     if (playlistInfo.proxy2) params.set('p3', playlistInfo.proxy2);
 
-    router.replace(`/iptv/${id}?${params.toString()}`);
+    // KEY FIX: { scroll: false } - এটি পেজকে উপরে উঠতে বাধা দিবে
+    router.replace(`/iptv/${id}?${params.toString()}`, { scroll: false });
   };
 
-  // ৪. ব্যাক বাটন লজিক
+  // 4. Back Button Logic
   const goBack = () => {
     if (playUrl) {
-       // প্লেয়ার বন্ধ করে চ্যানেল লিস্টে ফেরা
-       router.push(`/iptv/${id}`);
+       // প্লেয়ার বন্ধ করলে আগের পজিশনেই থাকবে
+       router.push(`/iptv/${id}`, { scroll: false });
     } else {
-       // লিস্ট থেকে হোম পেজের IPTV ট্যাবে ফেরা
        router.push('/?tab=iptv');
     }
   };
@@ -123,17 +121,16 @@ function IPTVContent() {
   return (
     <div className="min-h-screen bg-[#0f0f0f] text-white flex flex-col">
        
-       {/* PLAYER SECTION (STICKY TOP) */}
+       {/* PLAYER (Sticky Top) */}
        {playUrl && (
          <div className="sticky top-0 z-50 bg-black w-full shadow-2xl border-b border-gray-800">
             <div className="w-full aspect-video md:aspect-[21/9] md:h-[60vh] mx-auto bg-black relative">
                <Player 
-                  key={playUrl} // KEY change ensures proper reload on channel switch
+                  key={playUrl} 
                   option={{
                     url: playUrl,
                     type: "m3u8",
                     poster: playLogo ? `/api/image-proxy?url=${playLogo}` : "",
-                    // প্রক্সি অ্যারে পাস করা হলো
                     proxies: [p1, p2, p3].filter(Boolean) 
                   }}
                   style={{ width: "100%", height: "100%" }}
@@ -151,7 +148,7 @@ function IPTVContent() {
        )}
 
        {/* HEADER */}
-       <div className="p-4 border-b border-gray-800 bg-[#1a1a1a] sticky top-0 z-40 flex items-center gap-3 shadow-md">
+       <div className="p-4 border-b border-gray-800 bg-[#1a1a1a] flex items-center gap-3 shadow-md sticky top-0 z-40">
           <button onClick={goBack}>
              <ArrowLeft size={24} className="text-white hover:text-[#ff0055] transition"/>
           </button>
