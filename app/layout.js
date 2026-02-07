@@ -1,29 +1,26 @@
-import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Inter } from "next/font/google";
+import { SpeedInsights } from "@vercel/speed-insights/next"; // ১. ইম্পোর্ট করা হলো
 import "./globals.css";
 
-// Font Optimization: 'swap' ensures text is visible immediately
 const inter = Inter({ 
   subsets: ["latin"],
   display: "swap",
   variable: "--font-inter",
 });
 
-// Viewport Settings (Separated in Next.js 14+)
 export const viewport = {
   themeColor: "#000000",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  userScalable: false, // Prevents zooming issues on mobile player
+  userScalable: false,
 };
 
-// SEO Metadata
 export const metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://ratul-liv.vercel.app'), // আপনার ডোমেইন এখানে দিন
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://ratul-liv.vercel.app'),
   title: {
     default: "Ratul Liv - Live Sports & TV",
-    template: "%s | Ratul Liv", // Child pages will inject title here
+    template: "%s | Ratul Liv",
   },
   description: "Watch Live Sports, Cricket, Football, and Premium IPTV Channels for free on Ratul Liv.",
   keywords: ["Live Sports", "Cricket Live", "Football Streaming", "IPTV BD", "Ratul Liv", "Live TV"],
@@ -39,7 +36,7 @@ export const metadata = {
     },
   },
   icons: {
-    icon: "/favicon.ico", // public ফোল্ডারে আইকন থাকলে
+    icon: "/favicon.ico",
     apple: "/apple-touch-icon.png",
   },
   openGraph: {
@@ -51,7 +48,7 @@ export const metadata = {
     description: "Watch Live Sports, Cricket, Football, and IPTV Channels.",
     images: [
       {
-        url: "/og-image.jpg", // public ফোল্ডারে একটি og-image.jpg রাখবেন (1200x630px)
+        url: "/og-image.jpg",
         width: 1200,
         height: 630,
         alt: "Ratul Liv Preview",
@@ -71,9 +68,10 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" className={inter.variable}>
       <body className={`${inter.className} bg-black text-white antialiased selection:bg-[#ff0055] selection:text-white`}>
-        {/* Main Content */}
         <main className="min-h-screen flex flex-col">
            {children}
+           {/* ২. এখানে কম্পোনেন্টটি যুক্ত করা হলো */}
+           <SpeedInsights />
         </main>
       </body>
     </html>
