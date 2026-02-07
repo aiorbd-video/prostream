@@ -1,5 +1,6 @@
 import { Inter } from "next/font/google";
 import { SpeedInsights } from "@vercel/speed-insights/next"; // ১. ইম্পোর্ট করা হলো
+import { Analytics } from "@vercel/analytics/react"; // Analytics Import
 import "./globals.css";
 
 const inter = Inter({ 
