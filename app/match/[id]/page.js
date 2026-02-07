@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import MatchDetailClient from "@/components/MatchDetailClient"; // Client Component Import
+import MatchDetailClient from "@/components/MatchDetailClient"; 
 
 // 1. Data Fetching (Server Side)
 async function getMatchData(id) {
@@ -16,21 +16,50 @@ async function getMatchData(id) {
   return res.json();
 }
 
-// 2. SEO Metadata (Google/Facebook Share Fix)
+// 2. SEO Metadata (Dynamic Title & Images)
 export async function generateMetadata({ params }) {
   const match = await getMatchData(params.id);
-  if (!match) return { title: "Match Not Found" };
+  
+  if (!match) {
+    return {
+      title: "Match Not Found | Ratul Liv",
+    };
+  }
 
+  // টাইটেল ফরম্যাট: "Argentina vs Brazil - FIFA World Cup"
+  const pageTitle = `${match.team1.name} vs ${match.team2.name}`;
+  const description = `Watch ${match.title} Live Streaming on Ratul Liv.`;
+
+  // লোগো হ্যান্ডলিং (Default Image যদি লোগো না থাকে)
+  const image1 = match.team1.logo || "https://via.placeholder.com/600x400?text=Team1";
+  
   return {
-    title: `${match.team1.name} vs ${match.team2.name} | Ratul Liv`,
-    description: `Watch ${match.title} live streaming.`,
+    // Browser Tab Title
+    title: pageTitle,
+    description: description,
+
+    // Facebook / WhatsApp / Telegram Preview
     openGraph: {
-      title: `${match.team1.name} vs ${match.team2.name}`,
-      description: `Watch Live: ${match.title}`,
-      // Metadata images must be absolute URLs. Using direct URL or a public proxy for SEO only.
+      title: pageTitle, // এখানে যা দিবেন, লিংকের বড় টাইটেল তাই হবে
+      description: match.title, // ছোট লেখা (টুর্নামেন্ট নাম)
+      siteName: "Ratul Liv",
       images: [
-        match.team1.logo || "https://via.placeholder.com/800x400", 
-      ], 
+        {
+          url: image1, // ডাইরেক্ট URL হতে হবে (প্রক্সি কাজ করবে না)
+          width: 800,
+          height: 600,
+          alt: match.team1.name,
+        },
+      ],
+      type: "video.other",
+    },
+
+    // Twitter Card
+    twitter: {
+      card: "summary_large_image",
+      title: pageTitle,
+      description: description,
+      images: [image1],
     },
   };
 }
@@ -41,6 +70,6 @@ export default async function MatchPage({ params }) {
 
   if (!match) return notFound();
 
-  // Pass data to the Client Component (Your preferred design lives there)
+  // Pass data to Client Component for Design & Player
   return <MatchDetailClient matchData={match} />;
 }
