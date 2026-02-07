@@ -2,14 +2,13 @@
 import { useEffect, useRef } from "react";
 import Artplayer from "artplayer";
 import Hls from "hls.js";
-// Shaka Player Compiled Version (Best for Custom UI)
+// Shaka Player Compiled (Engine Only)
 import shaka from "shaka-player/dist/shaka-player.compiled.js";
 
 export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
 
   useEffect(() => {
-    // আগের ইন্সট্যান্স ক্লিন করা
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
@@ -18,7 +17,7 @@ export default function Player({ option, style, getInstance }) {
       ...option,
       container: artRef.current,
       
-      // === UI SETTINGS ===
+      // === UI SETTINGS (User Friendly) ===
       volume: 1,
       isLive: true,
       muted: false,
@@ -36,8 +35,8 @@ export default function Player({ option, style, getInstance }) {
       fullscreen: true,
       fullscreenWeb: true,
       miniProgressBar: true,
-      lock: true,
-      fastForward: true,
+      lock: true,           // Lock Screen Feature
+      fastForward: true,    // Double tap to seek
       autoOrientation: true,
       airplay: true,
       theme: "#ff0055",
@@ -79,7 +78,7 @@ export default function Player({ option, style, getInstance }) {
           }
         },
 
-        // DASH (mpd) Support via Shaka
+        // DASH (mpd) Support via Shaka Engine
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
            if (!shaka.Player.isBrowserSupported()) {
@@ -89,7 +88,7 @@ export default function Player({ option, style, getInstance }) {
 
            const player = new shaka.Player(video);
            
-           // === FIX 1: HIGH QUALITY START CONFIG ===
+           // === FIX: High Quality Start ===
            const config = {
                streaming: {
                    bufferingGoal: 15,
@@ -100,8 +99,7 @@ export default function Player({ option, style, getInstance }) {
                abr: {
                    enabled: true,
                    defaultBandwidthEstimate: 3000000, // **FIX:** Start at 3 Mbps (HD)
-                   switchInterval: 1, // **FIX:** Check speed every 1s
-                   bandwidthUpgradeTarget: 0.85,
+                   switchInterval: 1,
                }
            };
 
@@ -113,17 +111,38 @@ export default function Player({ option, style, getInstance }) {
 
            player.configure(config);
 
-           try {
-               await player.load(url);
+           // Proxy Loading Logic (If Proxies Exist)
+           const loadWithProxies = async () => {
+               const proxies = option.proxies || [];
                
-               // === FIX 2: ROBUST QUALITY SWITCHING ===
+               // 1. Try Direct
+               try {
+                   await player.load(url);
+                   return;
+               } catch(e) { console.warn("Direct failed"); }
+
+               // 2. Try Proxies
+               for(let p of proxies) {
+                   if(!p) continue;
+                   try {
+                       await player.load(p + url);
+                       return;
+                   } catch(e) {}
+               }
+               art.notice.show = "Stream Failed to Load";
+           };
+
+           await loadWithProxies();
+
+           // === FIX: Quality Switching Logic ===
+           try {
                const tracks = player.getVariantTracks();
-               // Filter unique video tracks by height
+               // Filter Video Tracks Only
                const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
+               
+               // Unique Tracks & Sort High to Low
                const uniqueTracks = [];
                const map = new Map();
-               
-               // Sort High to Low (1080p -> 720p...)
                videoTracks.sort((a, b) => b.height - a.height);
 
                for (const t of videoTracks) {
@@ -140,37 +159,32 @@ export default function Player({ option, style, getInstance }) {
                    }));
                    levels.push({ html: 'Auto', id: -1, default: true });
 
-                   // Add Quality to ArtPlayer Settings
                    art.setting.add({
                         html: 'Quality',
                         width: 150,
                         tooltip: 'Auto',
                         selector: levels,
                         onSelect: function (item) {
-                            // **FIX:** Force Switch Logic
                             if (item.id === -1) {
                                 // Auto Mode
                                 player.configure({ abr: { enabled: true } });
-                                art.notice.show = "Switched to Auto Quality";
+                                art.notice.show = "Auto Quality";
                             } else {
                                 // Manual Mode
                                 player.configure({ abr: { enabled: false } });
                                 const track = tracks.find(t => t.id === item.id);
                                 if (track) {
-                                    // **CRITICAL FIX:** Second argument 'true' clears buffer
-                                    // This forces immediate switch instead of waiting
+                                    // **TRUE forces buffer clear for instant switch**
                                     player.selectVariantTrack(track, true); 
-                                    art.notice.show = `Switched to ${item.html}`;
+                                    art.notice.show = `Quality: ${item.html}`;
                                 }
                             }
                             return item.html;
                         },
                     });
                }
-
            } catch (e) {
-               console.error("Shaka Load Error:", e);
-               // art.notice.show = "Stream Error: " + e.code;
+               console.error("Track Error:", e);
            }
 
            art.shaka = player;
