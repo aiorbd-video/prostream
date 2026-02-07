@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@vercel/speed-insights": "latest",
     "artplayer": "^5.1.0",
     "shaka-player": "^4.7.0", 
     "date-fns": "^3.3.1",
