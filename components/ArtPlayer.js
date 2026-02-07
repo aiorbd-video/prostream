@@ -41,12 +41,12 @@ export default function ShakaPlayer({ option, style, getInstance }) {
           }
         });
 
-        // --- ENGINE CONFIGURATION (FIXED FOR SWITCHING) ---
+        // --- ENGINE CONFIGURATION ---
         const playerConfig = {
           streaming: {
-              bufferingGoal: 30, // Increased buffer goal (Smooth Playback)
-              rebufferingGoal: 2, 
-              lowLatencyMode: false, // Disabled low-latency mode for smoother switching
+              bufferingGoal: 20, // Set to 20s for better buffering control
+              rebufferingGoal: 5, // Set rebuffering goal to 5s to avoid prolonged buffering
+              lowLatencyMode: false, // Disable low-latency mode to improve stability with proxies
               inaccurateManifestTolerance: 0,
               jumpLargeGaps: true,
               stallEnabled: true,
@@ -54,13 +54,17 @@ export default function ShakaPlayer({ option, style, getInstance }) {
           },
           abr: {
               enabled: true, // Enable auto quality switching
-              defaultBandwidthEstimate: 1000000, // Default estimate set to 1Mbps
-              switchInterval: 2, // Check every 2 seconds for bandwidth
-              bandwidthUpgradeTarget: 0.85, // Upgrade quality at 85% of available bandwidth
-              bandwidthDowngradeTarget: 0.95,
+              defaultBandwidthEstimate: 1000000, // Default bandwidth estimate set to 1Mbps
+              switchInterval: 3, // Adjust switch interval to 3 seconds for smoother quality switches
+              bandwidthUpgradeTarget: 0.85, // Upgrade quality when 85% bandwidth is available
+              bandwidthDowngradeTarget: 0.95, // Downgrade quality when bandwidth dips below 95%
           },
           manifest: { 
-              dash: { ignoreMinBufferTime: true } 
+              dash: { ignoreMinBufferTime: true },
+              hls: { 
+                // Adjust settings specific to HLS/M3U8 streams
+                startFromPlaylist: true, 
+              }
           }
         };
 
@@ -74,20 +78,21 @@ export default function ShakaPlayer({ option, style, getInstance }) {
 
         // --- EVENT LISTENERS (Quality Switch Fix) ---
         
-        // 1. When quality changes (Auto/Manual)
+        // Handle quality adaptation event (auto or manual)
         localPlayer.addEventListener('adaptation', () => {
             console.log("Quality Adapting...");
         });
 
+        // Handle variant change event (when quality changes)
         localPlayer.addEventListener('variantchanged', () => {
              console.log("Quality Changed");
-             // If the video is paused after a quality change, force play
+             // If the video is paused after a quality change, force it to play
              if (video.paused && !video.ended) {
                  video.play().catch(() => {});
              }
         });
 
-        // 2. Error Handling
+        // Error handling
         localPlayer.addEventListener('error', (event) => {
            console.error('Shaka Error:', event.detail);
         });
@@ -152,7 +157,7 @@ export default function ShakaPlayer({ option, style, getInstance }) {
             className="w-full h-full shaka-video" 
             poster={option.poster || ""} 
             autoPlay 
-            muted={false} // Auto-play fix
+            muted={true} // Auto-play fix
             playsInline 
             style={{ width: '100%', height: '100%' }} 
         />
