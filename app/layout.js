@@ -4,8 +4,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
-  title: "StreamHub BD",
-  description: "Live Sports & IPTV",
+  title: "Ratul Liv",
+  description: "Live Sports & IPTV ",
 };
 
 export default function RootLayout({ children }) {
