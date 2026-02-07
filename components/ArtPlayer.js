@@ -152,7 +152,7 @@ export default function ShakaPlayer({ option, style, getInstance }) {
             className="w-full h-full shaka-video" 
             poster={option.poster || ""} 
             autoPlay 
-            muted={true} // Auto-play fix
+            muted={false} // Auto-play fix
             playsInline 
             style={{ width: '100%', height: '100%' }} 
         />
