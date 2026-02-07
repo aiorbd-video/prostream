@@ -17,3 +17,57 @@ body {
     )
     rgb(var(--background-start-rgb));
 }
+/* --- RATUL LIV PLAYER STYLES --- */
+
+/* ১. প্লেয়ার রেপার (বডি) */
+.ratul-player-wrapper {
+  width: 100%;
+  position: relative;
+  background: black;
+  margin: 0 auto; /* মাঝখানে রাখার জন্য */
+  aspect-ratio: 16 / 9; /* ভিডিওর রেশিও ফিক্সড রাখা */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ২. ল্যাপটপ এবং ডেস্কটপ (স্ক্রিন ১০২৪ পিক্সেলের চেয়ে বড় হলে) */
+@media (min-width: 1024px) {
+  .ratul-player-wrapper {
+    max-width: 900px; /* সর্বোচ্চ ৯০০ পিক্সেল চওড়া হবে */
+    max-height: 80vh; /* স্ক্রিনের ৮০% এর বেশি লম্বা হবে না */
+    border-radius: 16px; /* কোণাগুলো একটু গোল হবে (মডার্ন লুক) */
+    overflow: hidden; /* গোল কোণা যাতে ভিডিওর বাইরে না যায় */
+    box-shadow: 0 0 20px rgba(0, 255, 85, 0.1); /* হালকা গ্লো ইফেক্ট */
+    margin-top: 20px;
+    margin-bottom: 20px;
+  }
+}
+
+/* ৩. বড় টিভি স্ক্রিন (১৯২০ পিক্সেলের চেয়ে বড় হলে) */
+@media (min-width: 1920px) {
+  .ratul-player-wrapper {
+    max-width: 1200px; /* টিভির জন্য একটু বড় হবে */
+    border: 1px solid #333;
+  }
+  
+  /* টিভিতে বাটনগুলো বড় দেখানোর জন্য */
+  .shaka-controls-button-panel {
+    transform: scale(1.2); 
+    transform-origin: bottom right;
+  }
+}
+
+/* ৪. মোবাইল (ডিফল্ট ফুল উইডথ) */
+@media (max-width: 768px) {
+  .ratul-player-wrapper {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 0; /* মোবাইলে কোণা গোল হবে না */
+  }
+}
+
+/* ৫. অটো ফুলস্ক্রিন বন্ধ করার ফিক্স */
+video {
+  object-fit: contain; /* ভিডিও কেটে যাবে না */
+}
