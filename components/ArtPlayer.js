@@ -44,19 +44,19 @@ export default function ShakaPlayer({ option, style, getInstance }) {
         // --- ENGINE CONFIGURATION (FIXED FOR SWITCHING) ---
         const playerConfig = {
           streaming: {
-              bufferingGoal: 30, // বাফার গোল বাড়ানো হয়েছে (Smooth Playback)
+              bufferingGoal: 30, // Increased buffer goal (Smooth Playback)
               rebufferingGoal: 2, 
-              lowLatencyMode: false, // **Fix:** লাইভ লো-লেটেন্সি অফ করা হলো যাতে সুইচে সমস্যা না হয়
+              lowLatencyMode: false, // Disabled low-latency mode for smoother switching
               inaccurateManifestTolerance: 0,
               jumpLargeGaps: true,
               stallEnabled: true,
               retryParameters: { maxAttempts: 5, baseDelay: 1000 },
           },
           abr: {
-              enabled: true, // **Fix:** অটো কোয়ালিটি অন
-              defaultBandwidthEstimate: 1000000, // ডিফল্ট ১ এমবিপিএস
-              switchInterval: 2, // **Fix:** প্রতি ২ সেকেন্ডে স্পিড চেক করবে (Fast Auto Switch)
-              bandwidthUpgradeTarget: 0.85, // ৮৫% ব্যান্ডউইথ পেলেই কোয়ালিটি বাড়াবে
+              enabled: true, // Enable auto quality switching
+              defaultBandwidthEstimate: 1000000, // Default estimate set to 1Mbps
+              switchInterval: 2, // Check every 2 seconds for bandwidth
+              bandwidthUpgradeTarget: 0.85, // Upgrade quality at 85% of available bandwidth
               bandwidthDowngradeTarget: 0.95,
           },
           manifest: { 
@@ -74,20 +74,20 @@ export default function ShakaPlayer({ option, style, getInstance }) {
 
         // --- EVENT LISTENERS (Quality Switch Fix) ---
         
-        // ১. যখন কোয়ালিটি চেঞ্জ হবে (Auto/Manual)
+        // 1. When quality changes (Auto/Manual)
         localPlayer.addEventListener('adaptation', () => {
             console.log("Quality Adapting...");
         });
 
         localPlayer.addEventListener('variantchanged', () => {
              console.log("Quality Changed");
-             // **Fix:** কোয়ালিটি চেঞ্জ হলে যদি আটকে যায়, ফোর্স প্লে করবে
+             // If the video is paused after a quality change, force play
              if (video.paused && !video.ended) {
                  video.play().catch(() => {});
              }
         });
 
-        // ২. এরর হ্যান্ডলিং
+        // 2. Error Handling
         localPlayer.addEventListener('error', (event) => {
            console.error('Shaka Error:', event.detail);
         });
