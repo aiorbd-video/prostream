@@ -1,15 +1,15 @@
 "use client";
-import { useEffect, useState, Suspense, useRef } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { db } from "@/lib/firebase";
 import { ref, get } from "firebase/database";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Player from "@/components/ArtPlayer";
 import { ArrowLeft, PlayCircle } from "lucide-react";
 
-// Suspense Wrapper
+// Suspense Wrapper (Next.js requirement)
 export default function IPTVPageWrapper() {
   return (
-    <Suspense fallback={<div className="bg-black text-white h-screen flex items-center justify-center">Loading Playlist...</div>}>
+    <Suspense fallback={<div className="bg-black text-white h-screen flex items-center justify-center font-mono">LOADING PLAYLIST...</div>}>
       <IPTVContent />
     </Suspense>
   );
@@ -20,7 +20,7 @@ function IPTVContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
-  // URL Params
+  // URL Params for Player State
   const playUrl = searchParams.get('play');
   const playName = searchParams.get('name');
   const playLogo = searchParams.get('logo');
@@ -30,11 +30,11 @@ function IPTVContent() {
 
   const [playlistInfo, setPlaylistInfo] = useState(null);
   const [channels, setChannels] = useState([]);
-  const [categories, setCategories] = useState(["All"]); // ক্যাটাগরি লিস্ট
-  const [activeCategory, setActiveCategory] = useState("All"); // সিলেক্ট করা ক্যাটাগরি
+  const [categories, setCategories] = useState(["All"]);
+  const [activeCategory, setActiveCategory] = useState("All");
   const [loading, setLoading] = useState(true);
 
-  // 1. Fetch Playlist Info
+  // 1. Fetch Playlist Info from Firebase
   useEffect(() => {
     const chRef = ref(db, `iptv/${id}`);
     get(chRef).then((snapshot) => {
@@ -48,14 +48,14 @@ function IPTVContent() {
     });
   }, [id]);
 
-  // 2. Fetch M3U
+  // 2. Fetch M3U (Direct -> Proxy Fallback)
   const fetchM3U = async (data) => {
     try {
       const res = await fetch(data.url);
       const text = await res.text();
       parseM3U(text);
     } catch (err) {
-      console.error("Direct fetch failed, trying fallback...");
+      console.warn("Direct fetch failed, trying fallback proxy...");
       try {
          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(data.url)}`;
          const res2 = await fetch(proxyUrl);
@@ -63,35 +63,37 @@ function IPTVContent() {
          parseM3U(text2);
       } catch (e) {
          setLoading(false);
-         alert("Failed to load playlist.");
+         alert("Failed to load playlist. Check URL or CORS.");
       }
     }
   };
 
-  // 3. Parse M3U with Categories (group-title)
+  // 3. Parse M3U & Extract Categories
   const parseM3U = (content) => {
     const lines = content.split('\n');
     const parsedChannels = [];
-    const uniqueCategories = new Set(["All"]); // ইউনিক ক্যাটাগরি রাখার জন্য
+    const uniqueCategories = new Set(["All"]); 
     let currentCh = {};
 
     lines.forEach(line => {
       line = line.trim();
       if (line.startsWith('#EXTINF')) {
-        // Logo Extract
+        // Logo
         const logoMatch = line.match(/tvg-logo="([^"]*)"/);
         const logo = logoMatch ? logoMatch[1] : "";
         
-        // Category Extract (group-title)
+        // Category (group-title)
         const groupMatch = line.match(/group-title="([^"]*)"/);
-        const group = groupMatch ? groupMatch[1] : "Others";
-        uniqueCategories.add(group);
+        let group = groupMatch ? groupMatch[1] : "Others";
+        // Clean up group name
+        group = group.replace(/"/g, '').trim();
+        if(group) uniqueCategories.add(group);
 
-        // Name Extract
+        // Name
         const nameParts = line.split(',');
         const name = nameParts[nameParts.length - 1].trim();
         
-        currentCh = { name, logo, group };
+        currentCh = { name, logo, group: group || "Others" };
       } else if (line.startsWith('http')) {
         currentCh.url = line;
         parsedChannels.push(currentCh);
@@ -99,12 +101,12 @@ function IPTVContent() {
       }
     });
 
-    setCategories(Array.from(uniqueCategories)); // সেট থেকে অ্যারেতে কনভার্ট
+    setCategories(Array.from(uniqueCategories));
     setChannels(parsedChannels);
     setLoading(false);
   };
 
-  // 4. Handle Play
+  // 4. Handle Channel Click (Update URL without Scroll)
   const handlePlay = (ch) => {
     const params = new URLSearchParams(searchParams);
     params.set('play', ch.url);
@@ -115,19 +117,22 @@ function IPTVContent() {
     if (playlistInfo.proxy1) params.set('p2', playlistInfo.proxy1);
     if (playlistInfo.proxy2) params.set('p3', playlistInfo.proxy2);
 
+    // scroll: false prevents jumping to top
     router.replace(`/iptv/${id}?${params.toString()}`, { scroll: false });
   };
 
-  // 5. Back Logic
+  // 5. Smart Back Button Logic
   const goBack = () => {
     if (playUrl) {
+       // Close Player: Remove play params but keep playlist ID
        router.push(`/iptv/${id}`, { scroll: false });
     } else {
+       // Go to Home IPTV Tab
        router.push('/?tab=iptv');
     }
   };
 
-  // 6. Filter Channels based on Category
+  // 6. Filter Logic
   const filteredChannels = activeCategory === "All" 
      ? channels 
      : channels.filter(ch => ch.group === activeCategory);
@@ -137,10 +142,11 @@ function IPTVContent() {
   return (
     <div className="min-h-screen bg-[#0f0f0f] text-white flex flex-col">
        
-       {/* PLAYER (Sticky Top) */}
+       {/* === PLAYER SECTION === */}
        {playUrl && (
          <div className="sticky top-0 z-50 bg-black w-full shadow-2xl border-b border-gray-800">
-            <div className="w-full aspect-video md:aspect-[21/9] md:h-[60vh] mx-auto bg-black relative">
+            {/* Desktop Friendly Wrapper */}
+            <div className="ratul-player-wrapper">
                <Player 
                   key={playUrl} 
                   option={{
@@ -152,29 +158,39 @@ function IPTVContent() {
                   style={{ width: "100%", height: "100%" }}
                />
             </div>
-            <div className="p-3 bg-[#111] flex justify-between items-center">
+            
+            {/* Player Controls / Title */}
+            <div className="p-3 bg-[#111] md:bg-[#1a1a1a] md:max-w-[900px] md:mx-auto flex justify-between items-center">
                <div className="overflow-hidden">
                  <h2 className="text-sm md:text-lg font-bold text-white truncate pr-2">{playName}</h2>
+                 <p className="text-xs text-gray-400">Category: {channels.find(c => c.url === playUrl)?.group || "Unknown"}</p>
                </div>
-               <button onClick={goBack} className="flex-shrink-0 px-3 py-1 bg-[#ff0055] rounded text-xs font-bold hover:bg-red-700 transition">
+               <button onClick={goBack} className="flex-shrink-0 px-4 py-1.5 bg-[#ff0055] rounded text-xs font-bold hover:bg-red-700 transition">
                  Close
                </button>
             </div>
          </div>
        )}
 
-       {/* HEADER */}
-       <div className="p-4 border-b border-gray-800 bg-[#1a1a1a] flex items-center gap-3 shadow-md sticky top-0 z-40">
+       {/* === HEADER === */}
+       <div className="p-4 border-b border-gray-800 bg-[#1a1a1a] flex items-center gap-3 shadow-md sticky top-0 md:static z-40">
           <button onClick={goBack}>
              <ArrowLeft size={24} className="text-white hover:text-[#ff0055] transition"/>
           </button>
-          <img src={playlistInfo?.logo} className="w-8 h-8 rounded-full bg-white" onError={(e) => e.target.src = "https://via.placeholder.com/50"}/>
-          <h1 className="text-lg font-bold truncate">{playlistInfo?.name}</h1>
+          <img 
+            src={playlistInfo?.logo} 
+            className="w-10 h-10 rounded-full bg-white object-contain p-1" 
+            onError={(e) => e.target.src = "https://via.placeholder.com/50"}
+          />
+          <div>
+            <h1 className="text-lg font-bold truncate leading-tight">{playlistInfo?.name}</h1>
+            <p className="text-xs text-gray-400">{channels.length} Channels</p>
+          </div>
        </div>
 
-       {/* CATEGORY TABS (SCROLLABLE) */}
+       {/* === CATEGORY TABS (SCROLLABLE) === */}
        {categories.length > 1 && (
-         <div className="sticky top-[73px] (playUrl ? 'top-[400px]' : 'top-[73px]') z-30 bg-[#0f0f0f]/95 backdrop-blur border-b border-gray-800 py-2 px-4">
+         <div className={`sticky z-30 bg-[#0f0f0f]/95 backdrop-blur border-b border-gray-800 py-3 px-4 ${playUrl ? 'top-[0px] md:top-0' : 'top-[73px] md:top-0'}`}>
             <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                {categories.map((cat, idx) => (
                   <button 
@@ -182,8 +198,8 @@ function IPTVContent() {
                     onClick={() => setActiveCategory(cat)}
                     className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 border ${
                        activeCategory === cat 
-                       ? 'bg-[#ff0055] text-white border-[#ff0055]' 
-                       : 'bg-[#1e1e1e] text-gray-400 border-gray-700 hover:border-gray-500'
+                       ? 'bg-[#ff0055] text-white border-[#ff0055] shadow-lg shadow-pink-500/20' 
+                       : 'bg-[#1e1e1e] text-gray-400 border-gray-700 hover:border-gray-500 hover:text-white'
                     }`}
                   >
                     {cat}
@@ -193,22 +209,22 @@ function IPTVContent() {
          </div>
        )}
 
-       {/* CHANNEL GRID */}
+       {/* === CHANNEL GRID === */}
        <div className="p-4 pb-20 overflow-y-auto min-h-[50vh]">
           {filteredChannels.length > 0 ? (
-            <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
                 {filteredChannels.map((ch, idx) => {
                 const isActive = playUrl === ch.url;
                 return (
                     <div 
-                    key={idx} 
-                    onClick={() => handlePlay(ch)}
-                    className={`rounded-xl overflow-hidden border transition active:scale-95 cursor-pointer flex flex-col relative group ${isActive ? 'border-[#ff0055] bg-[#222]' : 'border-gray-800 bg-[#1e1e1e] hover:border-gray-600'}`}
+                        key={idx} 
+                        onClick={() => handlePlay(ch)}
+                        className={`rounded-xl overflow-hidden border transition active:scale-95 cursor-pointer flex flex-col relative group ${isActive ? 'border-[#ff0055] bg-[#222]' : 'border-gray-800 bg-[#1e1e1e] hover:border-gray-600'}`}
                     >
                     <div className="aspect-square w-full bg-black/40 p-4 flex items-center justify-center relative">
                         <img 
                             src={ch.logo || "https://via.placeholder.com/100?text=TV"} 
-                            className="w-full h-full object-contain drop-shadow-lg"
+                            className="w-full h-full object-contain drop-shadow-lg group-hover:scale-110 transition duration-300"
                             loading="lazy"
                             onError={(e) => e.target.src = "https://via.placeholder.com/100?text=TV"}
                         />
@@ -224,7 +240,7 @@ function IPTVContent() {
                         )}
                     </div>
                     <div className="p-2 bg-[#252525] h-10 flex items-center justify-center flex-col">
-                        <span className={`text-[10px] font-medium text-center line-clamp-1 leading-tight ${isActive ? 'text-[#ff0055]' : 'text-gray-300'}`}>
+                        <span className={`text-[10px] font-medium text-center line-clamp-2 leading-tight ${isActive ? 'text-[#ff0055]' : 'text-gray-300'}`}>
                             {ch.name}
                         </span>
                     </div>
@@ -233,7 +249,9 @@ function IPTVContent() {
                 })}
             </div>
           ) : (
-             <div className="text-center text-gray-500 mt-10">No channels found in this category.</div>
+             <div className="flex flex-col items-center justify-center py-20 text-gray-500">
+                <p>No channels in "{activeCategory}"</p>
+             </div>
           )}
        </div>
     </div>
