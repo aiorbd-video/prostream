@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState } from "react";
 import Artplayer from "artplayer";
 import Hls from "hls.js";
-// Shaka Player Compiled (Engine Only)
 import shaka from "shaka-player/dist/shaka-player.compiled.js";
 
 export default function Player({ option, style, getInstance }) {
@@ -10,12 +9,12 @@ export default function Player({ option, style, getInstance }) {
   const [statusMsg, setStatusMsg] = useState("Connecting..."); 
 
   useEffect(() => {
-    // 1. Cleanup old instance
+    // 1. Cleanup
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
 
-    // 2. Header/Proxy Param Logic for Main URL
+    // 2. Header/Proxy Logic
     let mainUrl = option.url;
     if (option.referer || option.origin || option.userAgent || option.cookie) {
        const params = new URLSearchParams();
@@ -32,12 +31,11 @@ export default function Player({ option, style, getInstance }) {
       url: mainUrl, 
       container: artRef.current,
       
-      // === UI SETTINGS (Seekbar will appear automatically for VOD) ===
+      // === UI SETTINGS ===
       volume: 1,
       muted: false, 
       autoplay: true,
       autoPlayback: true,
-      // isLive: true,  <-- REMOVED to fix seekbar issues
       pip: true,
       autoSize: true,
       autoMini: true,
@@ -58,29 +56,44 @@ export default function Player({ option, style, getInstance }) {
 
       // === ENGINE CONFIGURATION ===
       customType: {
-        // 1. HLS (.m3u8) Support with PROXY RETRY
+        // 1. HLS (.m3u8) Support with PROXY RETRY & CUSTOM CONFIG
         m3u8: function (video, url, art) {
-          // Prepare URL List: [Direct, Proxy1, Proxy2...]
           const proxies = option.proxies || [];
-          const urlList = [url, ...proxies.map(p => p + option.url)]; // Use original option.url for proxies
+          const urlList = [url, ...proxies.map(p => p + option.url)]; 
           let currentIndex = 0;
           let hls = null;
 
           function loadHls(currentUrl) {
-              // Update Status
               setStatusMsg(currentIndex === 0 ? "Connecting..." : `Trying Server ${currentIndex}...`);
 
               if (Hls.isSupported()) {
-                  if (hls) hls.destroy(); // Destroy previous attempt
+                  if (hls) hls.destroy(); 
                   
-                  hls = new Hls();
+                  // === YOUR CONFIGURATION ADDED HERE ===
+                  hls = new Hls({
+                    debug: false,
+                    enableWorker: true,
+                    lowLatencyMode: false, // Stability priority
+                    backBufferLength: 90,  // Rewind capability
+                    maxBufferLength: 40,   // Buffer ahead
+                    maxMaxBufferLength: 80,
+                    liveSyncDurationCount: 3,
+                    fragLoadingTimeOut: 20000,     // 20s timeout
+                    manifestLoadingTimeOut: 20000,
+                    levelLoadingTimeOut: 20000,
+                    xhrSetup: function(xhr, url) {
+                        // CORS এর জন্য withCredentials ট্রু করা যেতে পারে যদি দরকার হয়
+                        // xhr.withCredentials = true; 
+                    }
+                  });
+
                   hls.loadSource(currentUrl);
                   hls.attachMedia(video);
                   art.hls = hls;
 
-                  // Success Handler
+                  // Success
                   hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                      setStatusMsg(""); // Clear status
+                      setStatusMsg(""); 
                       video.play().catch(() => {
                           video.muted = true;
                           video.play();
@@ -107,25 +120,21 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // Error / Retry Handler
+                  // Error / Retry Logic
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
                           console.warn(`HLS Error on Server ${currentIndex}:`, data.type);
-                          
-                          // Try Next Proxy
                           if (currentIndex < urlList.length - 1) {
                               currentIndex++;
                               loadHls(urlList[currentIndex]);
                           } else {
                               setStatusMsg("Stream Offline");
                               art.notice.show = "All Servers Failed";
-                              // hls.destroy(); // Optional: keep last error state
                           }
                       }
                   });
-
               } 
-              // Native Safari/iOS (No Proxy Retry Logic for Native yet, Direct Only)
+              // Native Safari/iOS
               else if (video.canPlayType("application/vnd.apple.mpegurl")) {
                   video.src = currentUrl;
                   video.play();
@@ -137,21 +146,17 @@ export default function Player({ option, style, getInstance }) {
               }
           }
 
-          // Start Loading
           loadHls(urlList[0]);
         },
 
-        // 2. DASH (.mpd) Support with PROXY RETRY
+        // 2. DASH (.mpd) Support
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
            if (!shaka.Player.isBrowserSupported()) {
                art.notice.show = "Browser not supported";
                return;
            }
-
            const player = new shaka.Player(video);
-           
-           // Config
            const config = {
                streaming: {
                    bufferingGoal: 15,
@@ -165,89 +170,64 @@ export default function Player({ option, style, getInstance }) {
                    switchInterval: 1,
                }
            };
-
            const keyData = option.clearkey || option.Clearkey;
-           if (keyData) {
-               config.drm = { clearKeys: keyData };
-           }
+           if (keyData) config.drm = { clearKeys: keyData };
+           
            player.configure(config);
 
-           // === PROXY RETRY LOOP ===
+           // Proxy Retry
            const loadWithProxies = async () => {
                const proxies = option.proxies || [];
-               
-               // 1. Try Main URL
                try {
                    setStatusMsg("Connecting...");
                    await player.load(url);
                    setStatusMsg(""); 
                    return;
-               } catch(e) { console.warn("Direct DASH failed"); }
+               } catch(e) { console.warn("Main failed"); }
 
-               // 2. Try Proxies
                for(let i = 0; i < proxies.length; i++) {
                    if(!proxies[i]) continue;
                    try {
                        setStatusMsg(`Trying Server ${i+1}...`);
-                       await player.load(proxies[i] + option.url); // Use original url for proxy append
+                       await player.load(proxies[i] + option.url);
                        setStatusMsg(""); 
                        return;
                    } catch(e) {}
                }
-               
                setStatusMsg("Stream Failed");
-               art.notice.show = "All Servers Failed";
            };
-
            await loadWithProxies();
 
-           // Quality Switching
+           // Quality Switching (Same as before)
            try {
                const tracks = player.getVariantTracks();
                const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
                const uniqueTracks = [];
                const map = new Map();
                videoTracks.sort((a, b) => b.height - a.height);
-
                for (const t of videoTracks) {
-                   if (!map.has(t.height)) {
-                       map.set(t.height, true);
-                       uniqueTracks.push(t);
-                   }
+                   if (!map.has(t.height)) { map.set(t.height, true); uniqueTracks.push(t); }
                }
-
                if (uniqueTracks.length > 0) {
-                   const levels = uniqueTracks.map((t) => ({
-                       html: `${t.height}p`,
-                       id: t.id,
-                   }));
+                   const levels = uniqueTracks.map((t) => ({ html: `${t.height}p`, id: t.id }));
                    levels.push({ html: 'Auto', id: -1, default: true });
-
                    art.setting.add({
                         html: 'Quality',
                         width: 150,
                         tooltip: 'Auto',
                         selector: levels,
                         onSelect: function (item) {
-                            if (item.id === -1) {
-                                player.configure({ abr: { enabled: true } });
-                                art.notice.show = "Auto Quality";
-                            } else {
+                            if (item.id === -1) { player.configure({ abr: { enabled: true } }); } 
+                            else { 
                                 player.configure({ abr: { enabled: false } });
                                 const track = tracks.find(t => t.id === item.id);
-                                if (track) {
-                                    player.selectVariantTrack(track, true); 
-                                    art.notice.show = `Quality: ${item.html}`;
-                                }
+                                if (track) player.selectVariantTrack(track, true); 
                             }
                             return item.html;
                         },
                     });
                }
-           } catch (e) {
-               console.error("Track Error:", e);
-           }
-
+           } catch (e) { console.error("Track Error:", e); }
            art.shaka = player;
            art.on('destroy', () => player.destroy());
         },
@@ -261,7 +241,6 @@ export default function Player({ option, style, getInstance }) {
       },
     });
 
-    // Autoplay Fallback (Sound)
     art.on('ready', () => {
         art.play().catch(() => {
             art.muted = true;
@@ -283,7 +262,6 @@ export default function Player({ option, style, getInstance }) {
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden" style={style}>
-        {/* === STATUS OVERLAY === */}
         {statusMsg && (
             <div className="absolute top-0 left-0 w-full bg-[#ff0055]/90 text-white text-xs font-bold py-1 z-50 text-center animate-pulse shadow-md">
                 {statusMsg}
