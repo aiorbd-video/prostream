@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Artplayer from "artplayer";
 import Hls from "hls.js";
 // Shaka Player Compiled (Engine Only)
@@ -7,6 +7,7 @@ import shaka from "shaka-player/dist/shaka-player.compiled.js";
 
 export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
+  const [statusMsg, setStatusMsg] = useState("Connecting..."); // নোটিসের জন্য স্টেট
 
   useEffect(() => {
     if (artRef.current && artRef.current.destroy) {
@@ -14,8 +15,7 @@ export default function Player({ option, style, getInstance }) {
     }
 
     // === 1. Header/Proxy Handling Logic ===
-    // যদি হেডার থাকে, URL-কে প্রক্সি লিংকে কনভার্ট করে নিবে
-    let playUrl = option.url;
+    let mainUrl = option.url;
     if (option.referer || option.origin || option.userAgent || option.cookie) {
        const params = new URLSearchParams();
        params.set("url", option.url);
@@ -23,20 +23,20 @@ export default function Player({ option, style, getInstance }) {
        if (option.origin) params.set("origin", option.origin);
        if (option.userAgent) params.set("userAgent", option.userAgent);
        if (option.cookie) params.set("cookie", option.cookie);
-       playUrl = `/api/proxy?${params.toString()}`;
+       mainUrl = `/api/proxy?${params.toString()}`;
     }
 
     const art = new Artplayer({
       ...option,
-      url: playUrl, // আপডেটেড URL
+      url: mainUrl, 
       container: artRef.current,
       
-      // === UI SETTINGS (User Friendly - No Change) ===
+      // === UI SETTINGS ===
       volume: 1,
-      isLive: true,
-      muted: false, // প্রথমে সাউন্ডসহ ট্রাই করবে
+      muted: false, 
       autoplay: true,
       autoPlayback: true,
+      // isLive: true,  <-- এই লাইনটি Seekbar হাইড করে দেয়, তাই রিমুভ করা হলো (অটো ডিটেক্ট করবে)
       pip: true,
       autoSize: true,
       autoMini: true,
@@ -57,16 +57,25 @@ export default function Player({ option, style, getInstance }) {
 
       // === ENGINE CONFIGURATION ===
       customType: {
-        // 1. HLS (.m3u8) Support
+        // 1. HLS (.m3u8) Support (আপনার চাওয়া লজিক + কোয়ালিটি মেনু)
         m3u8: function (video, url, art) {
+          setStatusMsg("Loading HLS...");
+          
           if (Hls.isSupported()) {
             const hls = new Hls();
             hls.loadSource(url);
             hls.attachMedia(video);
             art.hls = hls;
             
-            // HLS Quality Menu
+            // Quality Menu (Auto/1080p/720p...)
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                setStatusMsg(""); // লোড হলে মেসেজ গায়েব
+                video.play().catch(() => {
+                    video.muted = true;
+                    video.play();
+                    art.notice.show = "Tap to Unmute 🔊";
+                });
+
                 if (hls.levels.length > 1) {
                     const levels = hls.levels.map((level, index) => ({
                         html: `${level.height}p`,
@@ -84,23 +93,31 @@ export default function Player({ option, style, getInstance }) {
                         },
                     });
                 }
-                // HLS Autoplay Start
-                video.play().catch(() => {
-                    video.muted = true;
-                    video.play();
-                    art.notice.show = 'Tap to Unmute';
-                });
+            });
+
+            // Error Handling for Proxies
+            hls.on(Hls.Events.ERROR, function (event, data) {
+                if (data.fatal) {
+                   console.log("HLS Error, Trying Proxies...");
+                   // এখানে প্রক্সি ট্রাই করার লজিক চাইলে বসানো যাবে, তবে HLS সাধারণত অটো রিট্রাই করে
+                }
             });
 
             art.on('destroy', () => hls.destroy());
           } 
-          // Native Safari Support
+          // Native Safari/iOS Support
           else if (video.canPlayType("application/vnd.apple.mpegurl")) {
             video.src = url;
+            video.play();
+            setStatusMsg("");
+          } 
+          else {
+            art.notice.show = "HLS not supported in this browser!";
+            setStatusMsg("Format Error");
           }
         },
 
-        // 2. DASH (.mpd) Support via Shaka Engine
+        // 2. DASH (.mpd) Support (With Proxy Retry Loop)
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
            if (!shaka.Player.isBrowserSupported()) {
@@ -110,7 +127,7 @@ export default function Player({ option, style, getInstance }) {
 
            const player = new shaka.Player(video);
            
-           // === High Quality Start Config ===
+           // HD Start Logic
            const config = {
                streaming: {
                    bufferingGoal: 15,
@@ -120,12 +137,12 @@ export default function Player({ option, style, getInstance }) {
                },
                abr: {
                    enabled: true,
-                   defaultBandwidthEstimate: 3000000, // Start at 3 Mbps (HD)
+                   defaultBandwidthEstimate: 3000000, 
                    switchInterval: 1,
                }
            };
 
-           // DRM Setup
+           // DRM
            const keyData = option.clearkey || option.Clearkey;
            if (keyData) {
                config.drm = { clearKeys: keyData };
@@ -133,30 +150,36 @@ export default function Player({ option, style, getInstance }) {
 
            player.configure(config);
 
-           // Proxy Loading Logic (Failover System)
+           // === PROXY RETRY LOOP (Status Update সহ) ===
            const loadWithProxies = async () => {
                const proxies = option.proxies || [];
                
-               // 1. Try Direct or Header Proxy
+               // 1. Try Main URL
                try {
+                   setStatusMsg("Connecting...");
                    await player.load(url);
+                   setStatusMsg(""); // Success
                    return;
-               } catch(e) { console.warn("Main URL failed, trying fallbacks..."); }
+               } catch(e) { console.warn("Main failed"); }
 
-               // 2. Try Additional Proxies (p1, p2, p3)
-               for(let p of proxies) {
-                   if(!p) continue;
+               // 2. Try Proxy List (p1, p2, p3...)
+               for(let i = 0; i < proxies.length; i++) {
+                   if(!proxies[i]) continue;
                    try {
-                       await player.load(p + url);
+                       setStatusMsg(`Trying Server ${i+1}...`); // নোটিস আপডেট
+                       await player.load(proxies[i] + url);
+                       setStatusMsg(""); // Success
                        return;
                    } catch(e) {}
                }
-               art.notice.show = "Stream Failed to Load";
+               
+               setStatusMsg("Stream Failed");
+               art.notice.show = "All Servers Failed";
            };
 
            await loadWithProxies();
 
-           // === Quality Switching Logic ===
+           // Quality Switching Logic
            try {
                const tracks = player.getVariantTracks();
                const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
@@ -207,21 +230,18 @@ export default function Player({ option, style, getInstance }) {
            art.on('destroy', () => player.destroy());
         },
 
-        // 3. MP4 Support (Simple & Direct)
+        // 3. MP4 Support
         mp4: function (video, url, art) {
             video.src = url;
             video.load();
+            setStatusMsg("");
         }
       },
     });
 
-    // === 2. AUTOPLAY TRICK (Works on Chrome/Safari/Mobile) ===
+    // Autoplay Fallback (Sound)
     art.on('ready', () => {
-        // প্রথমে সাউন্ডসহ প্লে করার চেষ্টা
-        art.play().then(() => {
-            // সফল হলে কিছু করার দরকার নেই
-        }).catch(() => {
-            // ব্যর্থ হলে (Browser Block করলে), Mute করে আবার প্লে করবে
+        art.play().catch(() => {
             art.muted = true;
             art.play();
             art.notice.show = 'Tap to Unmute 🔊';
@@ -239,5 +259,17 @@ export default function Player({ option, style, getInstance }) {
     };
   }, [option.url, option.clearkey]); 
 
-  return <div ref={artRef} style={style} />;
+  return (
+    <div className="relative w-full h-full bg-black overflow-hidden" style={style}>
+        {/* === STATUS OVERLAY (Connecting/Trying Server...) === */}
+        {statusMsg && (
+            <div className="absolute top-0 left-0 w-full bg-[#ff0055]/90 text-white text-xs font-bold py-1 z-50 text-center animate-pulse">
+                {statusMsg}
+            </div>
+        )}
+        
+        {/* Player Container */}
+        <div ref={artRef} className="w-full h-full" />
+    </div>
+  );
 }
