@@ -9,12 +9,12 @@ export default function Player({ option, style, getInstance }) {
   const [statusMsg, setStatusMsg] = useState("Connecting..."); 
 
   useEffect(() => {
-    // 1. Cleanup
+    // 1. Cleanup Old Instance
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
 
-    // 2. Main URL Setup (Header Support)
+    // 2. Header/Proxy Logic (Generate Main URL)
     let mainUrl = option.url;
     if (option.referer || option.origin || option.userAgent || option.cookie) {
        const params = new URLSearchParams();
@@ -56,10 +56,12 @@ export default function Player({ option, style, getInstance }) {
 
       // === ENGINE CONFIGURATION ===
       customType: {
-        // 1. HLS (.m3u8) - Direct -> Proxy1 -> Proxy2 Logic
+        // -------------------------------------------------
+        // 1. HLS (.m3u8) - Direct -> Proxy Retry + Auto Recovery
+        // -------------------------------------------------
         m3u8: function (video, url, art) {
           const proxies = option.proxies || [];
-          // URL LIST: [Direct URL, Proxy1+URL, Proxy2+URL...]
+          // URL LIST: [Direct URL, Proxy1, Proxy2...]
           const urlList = [url, ...proxies.map(p => p + option.url)]; 
           let currentIndex = 0;
           let hls = null;
@@ -68,9 +70,9 @@ export default function Player({ option, style, getInstance }) {
               setStatusMsg(currentIndex === 0 ? "Connecting..." : `Trying Server ${currentIndex}...`);
 
               if (Hls.isSupported()) {
-                  if (hls) hls.destroy(); 
+                  if (hls) hls.destroy(); // Destroy previous instance
                   
-                  // HLS Configuration
+                  // HLS Configuration (Buffer & Timeout)
                   hls = new Hls({
                     debug: false,
                     enableWorker: true,
@@ -117,25 +119,34 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // === ERROR & PROXY RETRY LOGIC ===
+                  // === ERROR HANDLER (Auto Recovery + Proxy Switch) ===
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
-                          console.warn(`HLS Error: ${data.type}`);
+                          console.warn(`HLS Fatal Error: ${data.type}`);
                           
-                          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                              console.log("Media Error, Recovering...");
-                              hls.recoverMediaError();
-                          } else {
-                              // Network Error or Others -> Switch to Next Proxy
+                          switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                              console.log("Network error, trying to recover...");
+                              hls.startLoad(); // Auto Recovery 1
+                              break;
+
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                              console.log("Media error, recovering...");
+                              hls.recoverMediaError(); // Auto Recovery 2
+                              break;
+
+                            default:
+                              // Other Fatal Errors -> Switch to Next Proxy
+                              console.log("Unrecoverable error, switching server...");
                               hls.destroy();
                               if (currentIndex < urlList.length - 1) {
                                   currentIndex++;
-                                  console.log(`Switching to Proxy ${currentIndex}`);
                                   loadHls(urlList[currentIndex]);
                               } else {
                                   setStatusMsg("Stream Offline");
                                   art.notice.show("All Servers Failed");
                               }
+                              break;
                           }
                       }
                   });
@@ -155,7 +166,9 @@ export default function Player({ option, style, getInstance }) {
           loadHls(urlList[0]);
         },
 
-        // 2. DASH (.mpd) - Direct -> Proxy1 -> Proxy2 Logic
+        // -------------------------------------------------
+        // 2. DASH (.mpd) - Shaka Player + Proxy Retry
+        // -------------------------------------------------
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
            if (!shaka.Player.isBrowserSupported()) {
@@ -163,6 +176,8 @@ export default function Player({ option, style, getInstance }) {
                return;
            }
            const player = new shaka.Player(video);
+           
+           // Config
            const config = {
                streaming: {
                    bufferingGoal: 15,
@@ -243,7 +258,9 @@ export default function Player({ option, style, getInstance }) {
            art.on('destroy', () => player.destroy());
         },
 
+        // -------------------------------------------------
         // 3. MP4 Support
+        // -------------------------------------------------
         mp4: function (video, url, art) {
             video.src = url;
             video.load();
@@ -252,6 +269,7 @@ export default function Player({ option, style, getInstance }) {
       },
     });
 
+    // Autoplay Fallback (Sound)
     art.on('ready', () => {
         art.play().catch(() => {
             art.muted = true;
