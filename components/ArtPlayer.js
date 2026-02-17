@@ -1,161 +1,203 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import "shaka-player/dist/controls.css";
+import { useEffect, useRef } from "react";
+import Artplayer from "artplayer";
+import Hls from "hls.js";
+// Shaka Player for DASH support
+import shaka from "shaka-player/dist/shaka-player.compiled.js";
 
-export default function ShakaPlayer({ option, style, getInstance }) {
-const uiContainerRef = useRef(null);
-const videoRef = useRef(null);
-const [statusMsg, setStatusMsg] = useState("");
+export default function Player({ option, style, getInstance }) {
+  const artRef = useRef();
 
-useEffect(() => {
-let localPlayer = null;
-let ui = null;
+  useEffect(() => {
+    // আগের ইন্সট্যান্স ক্লিন করা
+    if (artRef.current && artRef.current.destroy) {
+      artRef.current.destroy(false);
+    }
 
-const initPlayer = async () => {  
-  try {  
-    const shaka = (await import("shaka-player/dist/shaka-player.ui.js")).default;  
-    shaka.polyfill.installAll();  
+    // --- PROXY URL GENERATOR (Optional Header Support) ---
+    // যদি হেডার থাকে, তবে প্রক্সি লিংকে কনভার্ট করবে। না থাকলে ডাইরেক্ট চালাবে।
+    let finalUrl = option.url;
+    if (option.referer || option.origin || option.userAgent || option.cookie) {
+        const params = new URLSearchParams();
+        params.set("url", option.url);
+        if (option.referer) params.set("referer", option.referer);
+        if (option.origin) params.set("origin", option.origin);
+        if (option.userAgent) params.set("userAgent", option.userAgent);
+        finalUrl = `/api/proxy?${params.toString()}`;
+    }
 
-    if (!shaka.Player.isBrowserSupported()) {  
-      setStatusMsg("Browser not supported!");  
-      return;  
-    }  
-
-    const video = videoRef.current;  
-    const uiContainer = uiContainerRef.current;  
-
-    localPlayer = new shaka.Player(video);  
-    ui = new shaka.ui.Overlay(localPlayer, uiContainer, video);  
-
-    // --- UI CONFIGURATION ---  
-    ui.configure({  
-      'controlPanelElements': [  
-         'play_pause', 'time_and_duration', 'spacer',   
-         'mute', 'volume', 'quality', 'fullscreen', 'overflow_menu'  
-      ],  
-      'overflowMenuButtons': ['quality', 'picture_in_picture', 'cast'],  
-      'seekBarColors': {   
-         base: 'rgba(255, 255, 255, 0.3)',   
-         buffered: 'rgba(255, 255, 255, 0.54)',   
-         played: '#ff0055'   
-      }  
-    });  
-
-    // --- ENGINE CONFIGURATION (FIXED FOR SWITCHING) ---  
-    const playerConfig = {  
-      streaming: {  
-          bufferingGoal: 30, // বাফার গোল বাড়ানো হয়েছে (Smooth Playback)  
-          rebufferingGoal: 2,   
-          lowLatencyMode: false, // **Fix:** লাইভ লো-লেটেন্সি অফ করা হলো যাতে সুইচে সমস্যা না হয়  
-          inaccurateManifestTolerance: 0,  
-          jumpLargeGaps: true,  
-          stallEnabled: true,  
-          retryParameters: { maxAttempts: 5, baseDelay: 1000 },  
-      },  
-      abr: {  
-          enabled: true, // **Fix:** অটো কোয়ালিটি অন  
-          defaultBandwidthEstimate: 1000000, // ডিফল্ট ১ এমবিপিএস  
-          switchInterval: 2, // **Fix:** প্রতি ২ সেকেন্ডে স্পিড চেক করবে (Fast Auto Switch)  
-          bandwidthUpgradeTarget: 0.85, // ৮৫% ব্যান্ডউইথ পেলেই কোয়ালিটি বাড়াবে  
-          bandwidthDowngradeTarget: 0.95,  
-      },  
-      manifest: {   
-          dash: { ignoreMinBufferTime: true }   
-      }  
-    };  
-
-    // DRM Setup  
-    const keyData = option.clearkey || option.Clearkey;  
-    if (keyData) {  
-       playerConfig.drm = { clearKeys: keyData };  
-    }  
-
-    localPlayer.configure(playerConfig);  
-
-    // --- EVENT LISTENERS (Quality Switch Fix) ---  
+    const art = new Artplayer({
+      ...option,
+      url: finalUrl,
+      container: artRef.current,
       
-    // ১. যখন কোয়ালিটি চেঞ্জ হবে (Auto/Manual)  
-    localPlayer.addEventListener('adaptation', () => {  
-        console.log("Quality Adapting...");  
-    });  
+      // === UI SETTINGS ===
+      volume: 1,
+      isLive: true,
+      muted: false,
+      autoplay: true,
+      autoPlayback: true,
+      pip: true,
+      autoSize: true,
+      autoMini: true,
+      screenshot: true,
+      setting: true,
+      loop: false,
+      flip: true,
+      playbackRate: true,
+      aspectRatio: true,
+      fullscreen: true,
+      fullscreenWeb: true,
+      miniProgressBar: true,
+      lock: true,
+      fastForward: true,
+      autoOrientation: true,
+      airplay: true,
+      theme: "#ff0055",
 
-    localPlayer.addEventListener('variantchanged', () => {  
-         console.log("Quality Changed");  
-         // **Fix:** কোয়ালিটি চেঞ্জ হলে যদি আটকে যায়, ফোর্স প্লে করবে  
-         if (video.paused && !video.ended) {  
-             video.play().catch(() => {});  
-         }  
-    });  
+      // === ENGINE CONFIGURATION (Universal Support) ===
+      customType: {
+        // 1. HLS (.m3u8) Support Logic
+        m3u8: function (video, url, art) {
+          if (Hls.isSupported()) {
+            // Desktop/Android (Chrome/Firefox) এর জন্য HLS.js
+            const hls = new Hls();
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            
+            // Quality Selector for HLS
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (hls.levels.length > 1) {
+                    const levels = hls.levels.map((level, index) => ({
+                        html: `${level.height}p`,
+                        level: index,
+                    }));
+                    levels.push({ html: 'Auto', level: -1, default: true });
+                    art.setting.add({
+                        html: 'Quality',
+                        width: 150,
+                        tooltip: 'Auto',
+                        selector: levels,
+                        onSelect: function (item) {
+                            hls.currentLevel = item.level;
+                            return item.html;
+                        },
+                    });
+                }
+            });
 
-    // ২. এরর হ্যান্ডলিং  
-    localPlayer.addEventListener('error', (event) => {  
-       console.error('Shaka Error:', event.detail);  
-    });  
+            art.hls = hls;
+            art.on('destroy', () => hls.destroy());
+          } 
+          // iOS/Safari Native Support Check (আপনার চাওয়া লাইনটি)
+          else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = url;
+          } 
+          else {
+            art.notice.show = "Unsupported HLS Format";
+          }
+        },
 
-    // --- LOAD STREAM (Direct -> Proxy) ---  
-    const loadStream = async () => {  
-        const proxies = option.proxies || [];  
-        const originalUrl = option.url;  
+        // 2. DASH (.mpd) Support via Shaka Player
+        dash: async function (video, url, art) {
+           shaka.polyfill.installAll();
+           if (!shaka.Player.isBrowserSupported()) {
+               art.notice.show = "Browser does not support DASH";
+               return;
+           }
 
-        // Try Direct  
-        try {  
-            setStatusMsg("Connecting...");  
-            await localPlayer.load(originalUrl);  
-            setStatusMsg("");   
-            return;  
-        } catch (e) {  
-            console.warn("Direct failed, trying proxies...");  
-        }  
+           const player = new shaka.Player(video);
+           
+           // Config for Fast Start & ClearKey
+           const config = {
+               streaming: {
+                   bufferingGoal: 15,
+                   lowLatencyMode: true,
+                   inaccurateManifestTolerance: 0,
+                   jumpLargeGaps: true,
+               },
+               abr: {
+                   enabled: true,
+                   defaultBandwidthEstimate: 3000000, // Start HD
+                   switchInterval: 1,
+               }
+           };
 
-        // Try Proxies  
-        for (let i = 0; i < proxies.length; i++) {  
-            if (!proxies[i]) continue;  
-            const proxyUrl = proxies[i] + originalUrl;  
-            try {  
-                setStatusMsg(`Retrying Server ${i+1}...`);  
-                await localPlayer.load(proxyUrl);  
-                setStatusMsg("");  
-                return;  
-            } catch (e) {}  
-        }  
-        setStatusMsg("Stream Offline");  
-    };  
+           // DRM Support
+           const keyData = option.clearkey || option.Clearkey;
+           if (keyData) {
+               config.drm = { clearKeys: keyData };
+           }
 
-    await loadStream();  
+           player.configure(config);
 
-    if (getInstance) getInstance(localPlayer);  
+           try {
+               await player.load(url);
+               
+               // Quality Selector for Shaka/DASH
+               const tracks = player.getVariantTracks();
+               const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
+               const uniqueTracks = [];
+               const map = new Map();
+               videoTracks.sort((a, b) => b.height - a.height); // Sort High to Low
 
-  } catch (e) {  
-    console.error("Init Error:", e);  
-    setStatusMsg("Player Error: " + e.message);  
-  }  
-};  
+               for (const t of videoTracks) {
+                   if (!map.has(t.height)) {
+                       map.set(t.height, true);
+                       uniqueTracks.push(t);
+                   }
+               }
 
-initPlayer();  
+               if (uniqueTracks.length > 0) {
+                   const levels = uniqueTracks.map((t) => ({
+                       html: `${t.height}p`,
+                       id: t.id,
+                   }));
+                   levels.push({ html: 'Auto', id: -1, default: true });
 
-return () => {  
-  if (ui) ui.destroy();  
-  if (localPlayer) localPlayer.destroy();  
-};
+                   art.setting.add({
+                        html: 'Quality',
+                        width: 150,
+                        tooltip: 'Auto',
+                        selector: levels,
+                        onSelect: function (item) {
+                            if (item.id === -1) {
+                                player.configure({ abr: { enabled: true } });
+                            } else {
+                                player.configure({ abr: { enabled: false } });
+                                const track = tracks.find(t => t.id === item.id);
+                                if (track) player.selectVariantTrack(track, true); 
+                            }
+                            return item.html;
+                        },
+                    });
+               }
 
-}, [option.url, option.clearkey]);
+           } catch (e) {
+               console.error("Shaka Error:", e);
+           }
 
-return (
-<div ref={uiContainerRef} className="shaka-video-container relative w-full h-full bg-black overflow-hidden" style={style}>
-{statusMsg && (
-<div className="absolute top-0 left-0 w-full bg-[#ff0055]/80 text-white p-1 text-xs z-50 text-center font-bold animate-pulse">
-{statusMsg}
-</div>
-)}
-<video
-ref={videoRef}
-className="w-full h-full shaka-video"
-poster={option.poster || ""}
-autoPlay
-muted={true} // Auto-play fix
-playsInline
-style={{ width: '100%', height: '100%' }}
-/>
-</div>
-);
+           art.shaka = player;
+           art.on('destroy', () => player.destroy());
+        },
+        
+        // 3. MP4 (Direct Play) - সাধারণত ArtPlayer অটো ডিটেক্ট করে, তবুও সেইফটির জন্য
+        mp4: function (video, url, art) {
+            video.src = url;
+        }
+      },
+    });
+
+    if (getInstance && typeof getInstance === "function") {
+      getInstance(art);
+    }
+
+    return () => {
+      if (art && art.destroy) {
+        art.destroy(false);
+      }
+    };
+  }, [option.url, option.clearkey, option.referer, option.origin]); 
+
+  return <div ref={artRef} style={style} />;
 }
