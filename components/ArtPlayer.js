@@ -14,7 +14,7 @@ export default function Player({ option, style, getInstance }) {
       artRef.current.destroy(false);
     }
 
-    // 2. Header/Proxy Logic (Main URL Generation)
+    // 2. Main URL Setup (Header Support)
     let mainUrl = option.url;
     if (option.referer || option.origin || option.userAgent || option.cookie) {
        const params = new URLSearchParams();
@@ -56,10 +56,10 @@ export default function Player({ option, style, getInstance }) {
 
       // === ENGINE CONFIGURATION ===
       customType: {
-        // 1. HLS (.m3u8) Support (Auto Recovery + Proxy Retry)
+        // 1. HLS (.m3u8) - Direct -> Proxy1 -> Proxy2 Logic
         m3u8: function (video, url, art) {
           const proxies = option.proxies || [];
-          // URL List: [Direct, Proxy1, Proxy2...]
+          // URL LIST: [Direct URL, Proxy1+URL, Proxy2+URL...]
           const urlList = [url, ...proxies.map(p => p + option.url)]; 
           let currentIndex = 0;
           let hls = null;
@@ -70,7 +70,7 @@ export default function Player({ option, style, getInstance }) {
               if (Hls.isSupported()) {
                   if (hls) hls.destroy(); 
                   
-                  // Optimized Configuration
+                  // HLS Configuration
                   hls = new Hls({
                     debug: false,
                     enableWorker: true,
@@ -117,24 +117,16 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // === ERROR & AUTO RECOVERY LOGIC ===
+                  // === ERROR & PROXY RETRY LOGIC ===
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
-                          console.warn(`HLS Error (${data.type}) details:`, data.details);
+                          console.warn(`HLS Error: ${data.type}`);
                           
-                          switch (data.type) {
-                            case Hls.ErrorTypes.NETWORK_ERROR:
-                              console.log("Network error, trying to recover...");
-                              hls.startLoad(); // Try to restart load
-                              break;
-
-                            case Hls.ErrorTypes.MEDIA_ERROR:
-                              console.log("Media error, recovering...");
-                              hls.recoverMediaError(); // Try to fix decoding
-                              break;
-
-                            default:
-                              // Fatal Error -> Destroy & Try Next Proxy
+                          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                              console.log("Media Error, Recovering...");
+                              hls.recoverMediaError();
+                          } else {
+                              // Network Error or Others -> Switch to Next Proxy
                               hls.destroy();
                               if (currentIndex < urlList.length - 1) {
                                   currentIndex++;
@@ -143,9 +135,7 @@ export default function Player({ option, style, getInstance }) {
                               } else {
                                   setStatusMsg("Stream Offline");
                                   art.notice.show("All Servers Failed");
-                                  // Optional: location.reload() if you really want hard reload
                               }
-                              break;
                           }
                       }
                   });
@@ -162,11 +152,10 @@ export default function Player({ option, style, getInstance }) {
               }
           }
 
-          // Start Loading Process
           loadHls(urlList[0]);
         },
 
-        // 2. DASH (.mpd) Support
+        // 2. DASH (.mpd) - Direct -> Proxy1 -> Proxy2 Logic
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
            if (!shaka.Player.isBrowserSupported()) {
@@ -192,29 +181,35 @@ export default function Player({ option, style, getInstance }) {
            
            player.configure(config);
 
+           // === PROXY RETRY LOOP ===
            const loadWithProxies = async () => {
                const proxies = option.proxies || [];
+               
+               // 1. Try Direct
                try {
                    setStatusMsg("Connecting...");
                    await player.load(url);
                    setStatusMsg(""); 
                    return;
-               } catch(e) { console.warn("Main failed"); }
+               } catch(e) { console.warn("Direct failed, trying proxies..."); }
 
+               // 2. Try Proxies
                for(let i = 0; i < proxies.length; i++) {
                    if(!proxies[i]) continue;
                    try {
                        setStatusMsg(`Trying Server ${i+1}...`);
+                       // Use Original URL with Proxy Prefix
                        await player.load(proxies[i] + option.url);
                        setStatusMsg(""); 
                        return;
                    } catch(e) {}
                }
                setStatusMsg("Stream Failed");
+               art.notice.show("All Servers Failed");
            };
            await loadWithProxies();
 
-           // Quality Switching
+           // Quality Switching Logic
            try {
                const tracks = player.getVariantTracks();
                const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
