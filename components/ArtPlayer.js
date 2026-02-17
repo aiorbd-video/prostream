@@ -14,7 +14,7 @@ export default function Player({ option, style, getInstance }) {
       artRef.current.destroy(false);
     }
 
-    // 2. Header/Proxy Logic
+    // 2. Header/Proxy Logic (Main URL Generation)
     let mainUrl = option.url;
     if (option.referer || option.origin || option.userAgent || option.cookie) {
        const params = new URLSearchParams();
@@ -56,9 +56,10 @@ export default function Player({ option, style, getInstance }) {
 
       // === ENGINE CONFIGURATION ===
       customType: {
-        // 1. HLS (.m3u8) Support with PROXY RETRY & CUSTOM CONFIG
+        // 1. HLS (.m3u8) Support (Auto Recovery + Proxy Retry)
         m3u8: function (video, url, art) {
           const proxies = option.proxies || [];
+          // URL List: [Direct, Proxy1, Proxy2...]
           const urlList = [url, ...proxies.map(p => p + option.url)]; 
           let currentIndex = 0;
           let hls = null;
@@ -69,29 +70,25 @@ export default function Player({ option, style, getInstance }) {
               if (Hls.isSupported()) {
                   if (hls) hls.destroy(); 
                   
-                  // === YOUR CONFIGURATION ADDED HERE ===
+                  // Optimized Configuration
                   hls = new Hls({
                     debug: false,
                     enableWorker: true,
-                    lowLatencyMode: false, // Stability priority
-                    backBufferLength: 90,  // Rewind capability
-                    maxBufferLength: 40,   // Buffer ahead
+                    lowLatencyMode: false,
+                    backBufferLength: 90,
+                    maxBufferLength: 40,
                     maxMaxBufferLength: 80,
                     liveSyncDurationCount: 3,
-                    fragLoadingTimeOut: 20000,     // 20s timeout
+                    fragLoadingTimeOut: 20000,
                     manifestLoadingTimeOut: 20000,
                     levelLoadingTimeOut: 20000,
-                    xhrSetup: function(xhr, url) {
-                        // CORS এর জন্য withCredentials ট্রু করা যেতে পারে যদি দরকার হয়
-                        // xhr.withCredentials = true; 
-                    }
                   });
 
                   hls.loadSource(currentUrl);
                   hls.attachMedia(video);
                   art.hls = hls;
 
-                  // Success
+                  // Success Handler
                   hls.on(Hls.Events.MANIFEST_PARSED, () => {
                       setStatusMsg(""); 
                       video.play().catch(() => {
@@ -120,21 +117,40 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // Error / Retry Logic
+                  // === ERROR & AUTO RECOVERY LOGIC ===
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
-                          console.warn(`HLS Error on Server ${currentIndex}:`, data.type);
-                          if (currentIndex < urlList.length - 1) {
-                              currentIndex++;
-                              loadHls(urlList[currentIndex]);
-                          } else {
-                              setStatusMsg("Stream Offline");
-                              art.notice.show = "All Servers Failed";
+                          console.warn(`HLS Error (${data.type}) details:`, data.details);
+                          
+                          switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                              console.log("Network error, trying to recover...");
+                              hls.startLoad(); // Try to restart load
+                              break;
+
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                              console.log("Media error, recovering...");
+                              hls.recoverMediaError(); // Try to fix decoding
+                              break;
+
+                            default:
+                              // Fatal Error -> Destroy & Try Next Proxy
+                              hls.destroy();
+                              if (currentIndex < urlList.length - 1) {
+                                  currentIndex++;
+                                  console.log(`Switching to Proxy ${currentIndex}`);
+                                  loadHls(urlList[currentIndex]);
+                              } else {
+                                  setStatusMsg("Stream Offline");
+                                  art.notice.show("All Servers Failed");
+                                  // Optional: location.reload() if you really want hard reload
+                              }
+                              break;
                           }
                       }
                   });
               } 
-              // Native Safari/iOS
+              // Native Safari/iOS Fallback
               else if (video.canPlayType("application/vnd.apple.mpegurl")) {
                   video.src = currentUrl;
                   video.play();
@@ -146,6 +162,7 @@ export default function Player({ option, style, getInstance }) {
               }
           }
 
+          // Start Loading Process
           loadHls(urlList[0]);
         },
 
@@ -175,7 +192,6 @@ export default function Player({ option, style, getInstance }) {
            
            player.configure(config);
 
-           // Proxy Retry
            const loadWithProxies = async () => {
                const proxies = option.proxies || [];
                try {
@@ -198,7 +214,7 @@ export default function Player({ option, style, getInstance }) {
            };
            await loadWithProxies();
 
-           // Quality Switching (Same as before)
+           // Quality Switching
            try {
                const tracks = player.getVariantTracks();
                const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
