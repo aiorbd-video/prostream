@@ -15,8 +15,10 @@ export default function Player({ option, style, getInstance }) {
     }
 
     // 2. Header/Proxy Logic (Generate Main URL)
+    // Note: Iframes usually don't support custom headers via proxy this way, 
+    // but we keep the logic for m3u8/mpd streams.
     let mainUrl = option.url;
-    if (option.referer || option.origin || option.userAgent || option.cookie) {
+    if (option.type !== 'iframe' && (option.referer || option.origin || option.userAgent || option.cookie)) {
        const params = new URLSearchParams();
        params.set("url", option.url);
        if (option.referer) params.set("referer", option.referer);
@@ -57,26 +59,49 @@ export default function Player({ option, style, getInstance }) {
       // === ENGINE CONFIGURATION ===
       customType: {
         // -------------------------------------------------
-        // 1. HLS (.m3u8) - Direct -> Proxy Retry System
+        // 1. IFRAME SUPPORT (New Added)
+        // -------------------------------------------------
+        iframe: function (video, url, art) {
+            setStatusMsg(""); // Clear connecting message
+            
+            // Hide the default video element and ArtPlayer UI
+            video.style.display = "none";
+            art.template.$controls.style.display = "none"; // Hide controls (seekbar/volume)
+            art.template.$mask.style.display = "none";     // Hide play button overlay
+            art.template.$loading.style.display = "none";  // Hide loading spinner
+
+            // Create and append iFrame
+            const iframe = document.createElement("iframe");
+            iframe.src = url;
+            iframe.style.width = "100%";
+            iframe.style.height = "100%";
+            iframe.style.border = "none";
+            iframe.style.position = "absolute";
+            iframe.style.top = "0";
+            iframe.style.left = "0";
+            iframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
+            iframe.allowFullscreen = true;
+
+            // Append to the player container
+            art.template.$video.parentNode.appendChild(iframe);
+        },
+
+        // -------------------------------------------------
+        // 2. HLS (.m3u8) - Direct -> Proxy Retry System
         // -------------------------------------------------
         m3u8: function (video, url, art) {
           const proxies = option.proxies || [];
-          
-          // URL LIST: [Direct URL, Proxy1, Proxy2...]
-          // Note: Proxy URL logic assumes proxy appends target URL at end
           const urlList = [url, ...proxies.map(p => p + option.url)]; 
-          
           let currentIndex = 0;
           let hls = null;
 
           function loadHls(currentUrl) {
               setStatusMsg(currentIndex === 0 ? "Connecting..." : `Trying Server ${currentIndex}...`);
-              console.log(`Attempting to load: ${currentUrl}`);
+              console.log(`Attempting to load HLS: ${currentUrl}`);
 
               if (Hls.isSupported()) {
-                  if (hls) hls.destroy(); // Destroy previous instance
+                  if (hls) hls.destroy(); 
                   
-                  // HLS Configuration
                   hls = new Hls({
                     debug: false,
                     enableWorker: true,
@@ -94,11 +119,10 @@ export default function Player({ option, style, getInstance }) {
                   hls.attachMedia(video);
                   art.hls = hls;
 
-                  // Success Handler
                   hls.on(Hls.Events.MANIFEST_PARSED, () => {
                       setStatusMsg(""); 
                       video.play().catch(() => {
-                          video.muted = false;
+                          video.muted = true;
                           video.play();
                           art.notice.show = "Tap to Unmute 🔊";
                       });
@@ -123,22 +147,15 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // === FIXED ERROR HANDLER ===
+                  // Error Handling
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
-                          console.warn(`HLS Fatal Error: ${data.type}`);
-                          
-                          // Only recover MEDIA_ERROR (Decoding issues)
                           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                               console.log("Media error, recovering...");
                               hls.recoverMediaError();
-                          } 
-                          else {
-                              // NETWORK_ERROR or OTHER_ERROR -> SWITCH SERVER
-                              // আগে এখানে hls.startLoad() ছিল, তাই লুপ হতো। এখন ডাইরেক্ট সুইচ হবে।
+                          } else {
                               console.log("Network/Fatal error, switching server...");
                               hls.destroy();
-                              
                               if (currentIndex < urlList.length - 1) {
                                   currentIndex++;
                                   loadHls(urlList[currentIndex]);
@@ -156,7 +173,6 @@ export default function Player({ option, style, getInstance }) {
                   video.play();
                   setStatusMsg("");
                   
-                  // Native Player Error Handling (Simple Retry)
                   video.onerror = () => {
                       if (currentIndex < urlList.length - 1) {
                           currentIndex++;
@@ -170,12 +186,11 @@ export default function Player({ option, style, getInstance }) {
                   setStatusMsg("Format Error");
               }
           }
-
           loadHls(urlList[0]);
         },
 
         // -------------------------------------------------
-        // 2. DASH (.mpd) - Shaka Player + Proxy Retry
+        // 3. DASH (.mpd) - Shaka Player + Proxy Retry
         // -------------------------------------------------
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
@@ -184,8 +199,6 @@ export default function Player({ option, style, getInstance }) {
                return;
            }
            const player = new shaka.Player(video);
-           
-           // Config
            const config = {
                streaming: {
                    bufferingGoal: 15,
@@ -204,11 +217,8 @@ export default function Player({ option, style, getInstance }) {
            
            player.configure(config);
 
-           // === PROXY RETRY LOOP ===
            const loadWithProxies = async () => {
                const proxies = option.proxies || [];
-               
-               // 1. Try Direct
                try {
                    setStatusMsg("Connecting...");
                    await player.load(url);
@@ -216,12 +226,10 @@ export default function Player({ option, style, getInstance }) {
                    return;
                } catch(e) { console.warn("Direct failed, trying proxies..."); }
 
-               // 2. Try Proxies
                for(let i = 0; i < proxies.length; i++) {
                    if(!proxies[i]) continue;
                    try {
                        setStatusMsg(`Trying Server ${i+1}...`);
-                       // Use Original URL with Proxy Prefix
                        await player.load(proxies[i] + option.url);
                        setStatusMsg(""); 
                        return;
@@ -232,7 +240,7 @@ export default function Player({ option, style, getInstance }) {
            };
            await loadWithProxies();
 
-           // Quality Switching Logic
+           // Quality Switching logic (Same as before)
            try {
                const tracks = player.getVariantTracks();
                const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
@@ -267,7 +275,7 @@ export default function Player({ option, style, getInstance }) {
         },
 
         // -------------------------------------------------
-        // 3. MP4 Support
+        // 4. MP4 Support
         // -------------------------------------------------
         mp4: function (video, url, art) {
             video.src = url;
@@ -277,14 +285,16 @@ export default function Player({ option, style, getInstance }) {
       },
     });
 
-    // Autoplay Fallback (Sound)
-    art.on('ready', () => {
-        art.play().catch(() => {
-            art.muted = true;
-            art.play();
-            art.notice.show = 'Tap to Unmute 🔊';
+    // Autoplay Fallback (Only for non-iframe)
+    if (option.type !== 'iframe') {
+        art.on('ready', () => {
+            art.play().catch(() => {
+                art.muted = true;
+                art.play();
+                art.notice.show = 'Tap to Unmute 🔊';
+            });
         });
-    });
+    }
 
     if (getInstance && typeof getInstance === "function") {
       getInstance(art);
@@ -295,7 +305,7 @@ export default function Player({ option, style, getInstance }) {
         art.destroy(false);
       }
     };
-  }, [option.url, option.clearkey]); 
+  }, [option.url, option.clearkey, option.type]); // Added option.type dependency
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden" style={style}>
