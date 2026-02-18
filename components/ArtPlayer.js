@@ -8,8 +8,11 @@ export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
   const [statusMsg, setStatusMsg] = useState("Connecting...");
 
-  // ১. IFRAME হ্যান্ডেলিং (সবচেয়ে ফাস্ট মেথড)
-  // যদি টাইপ iframe হয়, সরাসরি রিটার্ন করব। ArtPlayer লোড করার দরকার নেই।
+  // ============================================================
+  // ১. IFRAME হ্যান্ডেলিং (Browser Native Mode)
+  // ============================================================
+  // এখানে আমরা কোনো প্রক্সি বা কাস্টম হেডার দিচ্ছি না।
+  // সরাসরি ব্রাউজার দিয়ে লোড হবে, তাই User Agent হবে ডিভাইসের অরিজিনাল UA।
   if (option.type === "iframe") {
     return (
       <div className="w-full h-full bg-black relative">
@@ -23,21 +26,24 @@ export default function Player({ option, style, getInstance }) {
           className="w-full h-full border-0 absolute inset-0"
           allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
           allowFullScreen
-          onLoad={() => setStatusMsg(null)} // লোড হলে স্ট্যাটাস গায়েব
+          referrerPolicy="no-referrer" // কনফ্লিক্ট এড়ানোর জন্য রেফারার হাইড রাখা ভালো (অপশনাল)
+          onLoad={() => setStatusMsg(null)} 
         ></iframe>
       </div>
     );
   }
 
+  // ============================================================
+  // ২. ARTPLAYER লজিক (শুধুমাত্র m3u8, dash, mp4 এর জন্য)
+  // ============================================================
   useEffect(() => {
-    // আগের ইন্সট্যান্স ক্লিন করা
+    // ক্লিনআপ
     if (artRef.current && artRef.current.destroy) {
       artRef.current.destroy(false);
     }
 
-    // ২. URL জেনারেটর (Proxy Headers Support)
+    // Proxy URL জেনারেটর (শুধুমাত্র ভিডিও স্ট্রিমের জন্য)
     let playUrl = option.url;
-    // যদি হেডার থাকে তবেই প্রক্সি API কল হবে
     if (option.referer || option.origin || option.userAgent || option.cookie) {
        const params = new URLSearchParams();
        params.set("url", option.url);
@@ -48,12 +54,11 @@ export default function Player({ option, style, getInstance }) {
        playUrl = `/api/proxy?${params.toString()}`;
     }
 
-    // ৩. ArtPlayer কনফিগারেশন
     const art = new Artplayer({
       ...option,
       url: playUrl,
       container: artRef.current,
-      type: option.type || 'm3u8', // ডিফল্ট টাইপ
+      type: option.type || 'm3u8',
       
       // UI Settings
       volume: 1,
@@ -64,7 +69,7 @@ export default function Player({ option, style, getInstance }) {
       autoSize: true,
       autoMini: true,
       screenshot: true,
-      setting: true,     // সেটিংস বাটন অন
+      setting: true,
       loop: false,
       flip: true,
       playbackRate: true,
@@ -78,11 +83,10 @@ export default function Player({ option, style, getInstance }) {
       airplay: true,
       theme: "#ff0055",
       
-      // ৪. কাস্টম ইঞ্জিন (HLS & DASH)
       customType: {
+        // --- HLS Logic ---
         m3u8: function (video, url, art) {
           const proxies = option.proxies || [];
-          // URL List তৈরি: [Direct, Proxy1, Proxy2...]
           const urlList = [url, ...proxies.map(p => p + option.url)];
           let currentIndex = 0;
           let hls = null;
@@ -92,7 +96,6 @@ export default function Player({ option, style, getInstance }) {
               
               if (Hls.isSupported()) {
                   if (hls) hls.destroy();
-                  
                   hls = new Hls({
                       debug: false,
                       enableWorker: true,
@@ -100,14 +103,12 @@ export default function Player({ option, style, getInstance }) {
                       backBufferLength: 90
                   });
 
-                  // === ERROR HANDLER (আগে সেট করতে হবে) ===
+                  // ইভেন্ট লিসেনার (আগে সেট করা)
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
                           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                               hls.recoverMediaError();
                           } else {
-                              // Network Error -> Switch Proxy
-                              console.warn("HLS Network Error, Switching...");
                               hls.destroy();
                               if (currentIndex < urlList.length - 1) {
                                   currentIndex++;
@@ -120,29 +121,22 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // === QUALITY MENU FIX (আগে সেট করতে হবে) ===
                   hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                      setStatusMsg(""); // কানেক্টেড
-                      
-                      // অটো প্লে ট্রিক
+                      setStatusMsg("");
                       video.play().catch(() => {
                           video.muted = true;
                           video.play();
                           art.notice.show = "Tap to Unmute 🔊";
                       });
 
-                      // কোয়ালিটি লেভেল চেক এবং মেনু অ্যাড করা
+                      // Quality Menu
                       if (data.levels && data.levels.length > 1) {
                           const levels = data.levels.map((level, index) => ({
                               html: level.height + 'p',
                               level: index,
                           }));
-                          
-                          // অটো অপশন অ্যাড করা
                           levels.push({ html: 'Auto', level: -1, default: true });
 
-                          // ArtPlayer সেটিংস এ যুক্ত করা
-                          // এখানে আমরা চেক করছি সেটিংস এ অলরেডি কোয়ালিটি আছে কি না
                           const exist = art.setting.find(item => item.html === 'Quality');
                           if (!exist) {
                               art.setting.add({
@@ -159,14 +153,11 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // সব ইভেন্ট সেট করার পর সোর্স লোড করতে হবে
                   hls.loadSource(currentUrl);
                   hls.attachMedia(video);
                   art.hls = hls;
 
-              } 
-              // Safari / iOS Native
-              else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+              } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
                   video.src = currentUrl;
                   video.play();
                   setStatusMsg("");
@@ -174,17 +165,16 @@ export default function Player({ option, style, getInstance }) {
                   art.notice.show = "Format Not Supported";
               }
           }
-          // প্রথম বার লোড শুরু
           loadHls(urlList[0]);
         },
 
+        // --- DASH Logic ---
         dash: async function (video, url, art) {
            shaka.polyfill.installAll();
            if (!shaka.Player.isBrowserSupported()) {
                art.notice.show = "Browser not supported";
                return;
            }
-
            const player = new shaka.Player(video);
            const config = { 
                abr: { enabled: true, defaultBandwidthEstimate: 3000000 },
@@ -195,11 +185,8 @@ export default function Player({ option, style, getInstance }) {
            
            player.configure(config);
 
-           // Proxy Retry Loop for DASH
            const loadWithProxies = async () => {
                const proxies = option.proxies || [];
-               
-               // Try Direct
                try {
                    setStatusMsg("Connecting...");
                    await player.load(url);
@@ -207,7 +194,6 @@ export default function Player({ option, style, getInstance }) {
                    return;
                } catch(e) {}
 
-               // Try Proxies
                for(let i = 0; i < proxies.length; i++) {
                    try {
                        setStatusMsg(`Trying Server ${i+1}...`);
@@ -224,6 +210,7 @@ export default function Player({ option, style, getInstance }) {
            art.on('destroy', () => player.destroy());
         },
 
+        // --- MP4 Logic ---
         mp4: function (video, url, art) {
             video.src = url;
             video.play();
