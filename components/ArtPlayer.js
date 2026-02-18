@@ -6,305 +6,226 @@ import shaka from "shaka-player/dist/shaka-player.compiled.js";
 
 export default function Player({ option, style, getInstance }) {
   const artRef = useRef();
-  const [statusMsg, setStatusMsg] = useState("Connecting..."); 
+  const [statusMsg, setStatusMsg] = useState("Connecting...");
 
   useEffect(() => {
-    // 1. Cleanup Old Instance
-    if (artRef.current && artRef.current.destroy) {
-      artRef.current.destroy(false);
+    if (!option?.url) return;
+
+    // Destroy old instance
+    if (artRef.current?.art) {
+      artRef.current.art.destroy(false);
     }
 
-    // 2. Header/Proxy Logic (Generate Main URL)
-    let mainUrl = option.url;
-    if (option.referer || option.origin || option.userAgent || option.cookie) {
-       const params = new URLSearchParams();
-       params.set("url", option.url);
-       if (option.referer) params.set("referer", option.referer);
-       if (option.origin) params.set("origin", option.origin);
-       if (option.userAgent) params.set("userAgent", option.userAgent);
-       if (option.cookie) params.set("cookie", option.cookie);
-       mainUrl = `/api/proxy?${params.toString()}`;
-    }
+    // 🧠 BUILD URL LIST (Direct → Proxy)
+    const directUrl = option.url;
+    const proxyBase = option.proxy || null;
+
+    const urlList = proxyBase
+      ? [directUrl, proxyBase + encodeURIComponent(directUrl)]
+      : [directUrl];
 
     const art = new Artplayer({
       ...option,
-      url: mainUrl, 
+      url: urlList[0],
       container: artRef.current,
-      
-      // === UI SETTINGS ===
+
+      // UI SETTINGS
       volume: 1,
-      muted: false, 
       autoplay: true,
       autoPlayback: true,
       pip: true,
       autoSize: true,
-      autoMini: true,
-      screenshot: true,
-      setting: true,
-      loop: false,
-      flip: true,
-      playbackRate: true,
-      aspectRatio: true,
       fullscreen: true,
       fullscreenWeb: true,
       miniProgressBar: true,
-      lock: true,           
-      fastForward: true,    
+      lock: true,
+      fastForward: true,
       autoOrientation: true,
-      airplay: true,
       theme: "#ff0055",
 
-      // === ENGINE CONFIGURATION ===
       customType: {
-        // -------------------------------------------------
-        // 1. HLS (.m3u8) - Direct -> Proxy Retry System
-        // -------------------------------------------------
+        // ================= HLS (.m3u8) =================
         m3u8: function (video, url, art) {
-          const proxies = option.proxies || [];
-          
-          // URL LIST: [Direct URL, Proxy1, Proxy2...]
-          // Note: Proxy URL logic assumes proxy appends target URL at end
-          const urlList = [url, ...proxies.map(p => p + option.url)]; 
-          
-          let currentIndex = 0;
           let hls = null;
+          let currentIndex = 0;
+          let isDestroyed = false;
 
-          function loadHls(currentUrl) {
-              setStatusMsg(currentIndex === 0 ? "Connecting..." : `Trying Server ${currentIndex}...`);
-              console.log(`Attempting to load: ${currentUrl}`);
+          function loadStream(streamUrl) {
+            if (isDestroyed) return;
 
-              if (Hls.isSupported()) {
-                  if (hls) hls.destroy(); // Destroy previous instance
-                  
-                  // HLS Configuration
-                  hls = new Hls({
-                    debug: false,
-                    enableWorker: true,
-                    lowLatencyMode: false,
-                    backBufferLength: 90,
-                    maxBufferLength: 40,
-                    maxMaxBufferLength: 80,
-                    liveSyncDurationCount: 3,
-                    fragLoadingTimeOut: 20000,
-                    manifestLoadingTimeOut: 20000,
-                    levelLoadingTimeOut: 20000,
-                  });
+            setStatusMsg(
+              currentIndex === 0
+                ? "Connecting (Direct)..."
+                : "Connecting (Proxy)..."
+            );
 
-                  hls.loadSource(currentUrl);
-                  hls.attachMedia(video);
-                  art.hls = hls;
+            if (hls) {
+              hls.destroy();
+              hls = null;
+            }
 
-                  // Success Handler
-                  hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                      setStatusMsg(""); 
-                      video.play().catch(() => {
-                          video.muted = true;
-                          video.play();
-                          art.notice.show = "Tap to Unmute 🔊";
-                      });
-                      
-                      // Quality Menu
-                      if (hls.levels.length > 1) {
-                          const levels = hls.levels.map((level, index) => ({
-                              html: `${level.height}p`,
-                              level: index,
-                          }));
-                          levels.push({ html: 'Auto', level: -1, default: true });
-                          art.setting.add({
-                              html: 'Quality',
-                              width: 150,
-                              tooltip: 'Auto',
-                              selector: levels,
-                              onSelect: function (item) {
-                                  hls.currentLevel = item.level;
-                                  return item.html;
-                              },
-                          });
-                      }
-                  });
+            if (Hls.isSupported()) {
+              hls = new Hls({
+                debug: false,
+                enableWorker: true,
+                lowLatencyMode: false,
+                backBufferLength: 90,
+                maxBufferLength: 40,
+                maxMaxBufferLength: 80,
+                liveSyncDurationCount: 3,
+                fragLoadingTimeOut: 20000,
+                manifestLoadingTimeOut: 20000,
+                levelLoadingTimeOut: 20000,
+                startLevel: -1,
+              });
 
-                  // === FIXED ERROR HANDLER ===
-                  hls.on(Hls.Events.ERROR, function (event, data) {
-                      if (data.fatal) {
-                          console.warn(`HLS Fatal Error: ${data.type}`);
-                          
-                          // Only recover MEDIA_ERROR (Decoding issues)
-                          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                              console.log("Media error, recovering...");
-                              hls.recoverMediaError();
-                          } 
-                          else {
-                              // NETWORK_ERROR or OTHER_ERROR -> SWITCH SERVER
-                              // আগে এখানে hls.startLoad() ছিল, তাই লুপ হতো। এখন ডাইরেক্ট সুইচ হবে।
-                              console.log("Network/Fatal error, switching server...");
-                              hls.destroy();
-                              
-                              if (currentIndex < urlList.length - 1) {
-                                  currentIndex++;
-                                  loadHls(urlList[currentIndex]);
-                              } else {
-                                  setStatusMsg("Stream Offline");
-                                  art.notice.show("All Servers Failed");
-                              }
-                          }
-                      }
-                  });
-              } 
-              // Native Safari/iOS Fallback
-              else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-                  video.src = currentUrl;
+              hls.loadSource(streamUrl);
+              hls.attachMedia(video);
+              art.hls = hls;
+
+              // SUCCESS
+              hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                setStatusMsg("");
+                video.play().catch(() => {
+                  video.muted = true;
                   video.play();
-                  setStatusMsg("");
-                  
-                  // Native Player Error Handling (Simple Retry)
-                  video.onerror = () => {
-                      if (currentIndex < urlList.length - 1) {
-                          currentIndex++;
-                          video.src = urlList[currentIndex];
-                          video.play();
-                      }
-                  };
-              } 
-              else {
-                  art.notice.show = "HLS not supported!";
-                  setStatusMsg("Format Error");
-              }
+                  art.notice.show = "Tap to Unmute 🔊";
+                });
+
+                // Quality Selector
+                if (hls.levels.length > 1) {
+                  const levels = hls.levels.map((level, index) => ({
+                    html: level.height
+                      ? `${level.height}p`
+                      : `Level ${index + 1}`,
+                    level: index,
+                  }));
+
+                  levels.push({ html: "Auto", level: -1, default: true });
+
+                  art.setting.add({
+                    html: "Quality",
+                    width: 150,
+                    tooltip: "Auto",
+                    selector: levels,
+                    onSelect: function (item) {
+                      hls.currentLevel = item.level;
+                      return item.html;
+                    },
+                  });
+                }
+              });
+
+              // ERROR HANDLER (Direct → Proxy fallback)
+              hls.on(Hls.Events.ERROR, (event, data) => {
+                if (!data.fatal) return;
+
+                console.warn("HLS Fatal Error:", data.type);
+
+                // Try media recovery first
+                if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                  hls.recoverMediaError();
+                  return;
+                }
+
+                // NETWORK / OTHER ERROR → SWITCH SOURCE
+                if (currentIndex < urlList.length - 1) {
+                  currentIndex++;
+                  console.log("Switching to fallback:", urlList[currentIndex]);
+                  loadStream(urlList[currentIndex]);
+                } else {
+                  setStatusMsg("Stream Offline");
+                  art.notice.show = "All Sources Failed";
+                }
+              });
+            }
+            // Safari / iOS Native Fallback
+            else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+              video.src = streamUrl;
+              video.play();
+              setStatusMsg("");
+
+              video.onerror = () => {
+                if (currentIndex < urlList.length - 1) {
+                  currentIndex++;
+                  loadStream(urlList[currentIndex]);
+                } else {
+                  setStatusMsg("Playback Failed");
+                }
+              };
+            } else {
+              setStatusMsg("Format Not Supported");
+              art.notice.show = "HLS not supported";
+            }
           }
 
-          loadHls(urlList[0]);
+          loadStream(urlList[currentIndex]);
+
+          art.on("destroy", () => {
+            isDestroyed = true;
+            if (hls) hls.destroy();
+          });
         },
 
-        // -------------------------------------------------
-        // 2. DASH (.mpd) - Shaka Player + Proxy Retry
-        // -------------------------------------------------
+        // ================= DASH (.mpd) =================
         dash: async function (video, url, art) {
-           shaka.polyfill.installAll();
-           if (!shaka.Player.isBrowserSupported()) {
-               art.notice.show = "Browser not supported";
-               return;
-           }
-           const player = new shaka.Player(video);
-           
-           // Config
-           const config = {
-               streaming: {
-                   bufferingGoal: 15,
-                   lowLatencyMode: true,
-                   inaccurateManifestTolerance: 0,
-                   jumpLargeGaps: true,
-               },
-               abr: {
-                   enabled: true,
-                   defaultBandwidthEstimate: 3000000, 
-                   switchInterval: 1,
-               }
-           };
-           const keyData = option.clearkey || option.Clearkey;
-           if (keyData) config.drm = { clearKeys: keyData };
-           
-           player.configure(config);
+          shaka.polyfill.installAll();
+          if (!shaka.Player.isBrowserSupported()) {
+            art.notice.show = "Browser not supported";
+            return;
+          }
 
-           // === PROXY RETRY LOOP ===
-           const loadWithProxies = async () => {
-               const proxies = option.proxies || [];
-               
-               // 1. Try Direct
-               try {
-                   setStatusMsg("Connecting...");
-                   await player.load(url);
-                   setStatusMsg(""); 
-                   return;
-               } catch(e) { console.warn("Direct failed, trying proxies..."); }
+          const player = new shaka.Player(video);
 
-               // 2. Try Proxies
-               for(let i = 0; i < proxies.length; i++) {
-                   if(!proxies[i]) continue;
-                   try {
-                       setStatusMsg(`Trying Server ${i+1}...`);
-                       // Use Original URL with Proxy Prefix
-                       await player.load(proxies[i] + option.url);
-                       setStatusMsg(""); 
-                       return;
-                   } catch(e) {}
-               }
-               setStatusMsg("Stream Failed");
-               art.notice.show("All Servers Failed");
-           };
-           await loadWithProxies();
+          try {
+            setStatusMsg("Connecting...");
+            await player.load(url);
+            setStatusMsg("");
+          } catch (e) {
+            console.error("DASH Error:", e);
+            setStatusMsg("Stream Failed");
+          }
 
-           // Quality Switching Logic
-           try {
-               const tracks = player.getVariantTracks();
-               const videoTracks = tracks.filter(t => t.type === 'variant' && t.height);
-               const uniqueTracks = [];
-               const map = new Map();
-               videoTracks.sort((a, b) => b.height - a.height);
-               for (const t of videoTracks) {
-                   if (!map.has(t.height)) { map.set(t.height, true); uniqueTracks.push(t); }
-               }
-               if (uniqueTracks.length > 0) {
-                   const levels = uniqueTracks.map((t) => ({ html: `${t.height}p`, id: t.id }));
-                   levels.push({ html: 'Auto', id: -1, default: true });
-                   art.setting.add({
-                        html: 'Quality',
-                        width: 150,
-                        tooltip: 'Auto',
-                        selector: levels,
-                        onSelect: function (item) {
-                            if (item.id === -1) { player.configure({ abr: { enabled: true } }); } 
-                            else { 
-                                player.configure({ abr: { enabled: false } });
-                                const track = tracks.find(t => t.id === item.id);
-                                if (track) player.selectVariantTrack(track, true); 
-                            }
-                            return item.html;
-                        },
-                    });
-               }
-           } catch (e) { console.error("Track Error:", e); }
-           art.shaka = player;
-           art.on('destroy', () => player.destroy());
+          art.shaka = player;
+          art.on("destroy", () => player.destroy());
         },
 
-        // -------------------------------------------------
-        // 3. MP4 Support
-        // -------------------------------------------------
-        mp4: function (video, url, art) {
-            video.src = url;
-            video.load();
-            setStatusMsg("");
-        }
+        // ================= MP4 =================
+        mp4: function (video, url) {
+          video.src = url;
+          video.load();
+          setStatusMsg("");
+        },
       },
     });
 
-    // Autoplay Fallback (Sound)
-    art.on('ready', () => {
-        art.play().catch(() => {
-            art.muted = true;
-            art.play();
-            art.notice.show = 'Tap to Unmute 🔊';
-        });
+    artRef.current.art = art;
+
+    art.on("ready", () => {
+      art.play().catch(() => {
+        art.muted = true;
+        art.play();
+        art.notice.show = "Tap to Unmute 🔊";
+      });
     });
 
-    if (getInstance && typeof getInstance === "function") {
-      getInstance(art);
-    }
+    getInstance?.(art);
 
     return () => {
       if (art && art.destroy) {
         art.destroy(false);
       }
     };
-  }, [option.url, option.clearkey]); 
+  }, [option.url, option.proxy]);
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden" style={style}>
-        {statusMsg && (
-            <div className="absolute top-0 left-0 w-full bg-[#ff0055]/90 text-white text-xs font-bold py-1 z-50 text-center animate-pulse shadow-md">
-                {statusMsg}
-            </div>
-        )}
-        <div ref={artRef} className="w-full h-full" />
+      {statusMsg && (
+        <div className="absolute top-0 left-0 w-full bg-[#ff0055]/90 text-white text-xs font-bold py-1 z-50 text-center animate-pulse shadow-md">
+          {statusMsg}
+        </div>
+      )}
+      <div ref={artRef} className="w-full h-full" />
     </div>
   );
 }
