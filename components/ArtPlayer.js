@@ -57,22 +57,26 @@ export default function Player({ option, style, getInstance }) {
       // === ENGINE CONFIGURATION ===
       customType: {
         // -------------------------------------------------
-        // 1. HLS (.m3u8) - Direct -> Proxy Retry + Auto Recovery
+        // 1. HLS (.m3u8) - Direct -> Proxy Retry System
         // -------------------------------------------------
         m3u8: function (video, url, art) {
           const proxies = option.proxies || [];
+          
           // URL LIST: [Direct URL, Proxy1, Proxy2...]
+          // Note: Proxy URL logic assumes proxy appends target URL at end
           const urlList = [url, ...proxies.map(p => p + option.url)]; 
+          
           let currentIndex = 0;
           let hls = null;
 
           function loadHls(currentUrl) {
               setStatusMsg(currentIndex === 0 ? "Connecting..." : `Trying Server ${currentIndex}...`);
+              console.log(`Attempting to load: ${currentUrl}`);
 
               if (Hls.isSupported()) {
                   if (hls) hls.destroy(); // Destroy previous instance
                   
-                  // HLS Configuration (Buffer & Timeout)
+                  // HLS Configuration
                   hls = new Hls({
                     debug: false,
                     enableWorker: true,
@@ -119,26 +123,22 @@ export default function Player({ option, style, getInstance }) {
                       }
                   });
 
-                  // === ERROR HANDLER (Auto Recovery + Proxy Switch) ===
+                  // === FIXED ERROR HANDLER ===
                   hls.on(Hls.Events.ERROR, function (event, data) {
                       if (data.fatal) {
                           console.warn(`HLS Fatal Error: ${data.type}`);
                           
-                          switch (data.type) {
-                            case Hls.ErrorTypes.NETWORK_ERROR:
-                              console.log("Network error, trying to recover...");
-                              hls.startLoad(); // Auto Recovery 1
-                              break;
-
-                            case Hls.ErrorTypes.MEDIA_ERROR:
+                          // Only recover MEDIA_ERROR (Decoding issues)
+                          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                               console.log("Media error, recovering...");
-                              hls.recoverMediaError(); // Auto Recovery 2
-                              break;
-
-                            default:
-                              // Other Fatal Errors -> Switch to Next Proxy
-                              console.log("Unrecoverable error, switching server...");
+                              hls.recoverMediaError();
+                          } 
+                          else {
+                              // NETWORK_ERROR or OTHER_ERROR -> SWITCH SERVER
+                              // আগে এখানে hls.startLoad() ছিল, তাই লুপ হতো। এখন ডাইরেক্ট সুইচ হবে।
+                              console.log("Network/Fatal error, switching server...");
                               hls.destroy();
+                              
                               if (currentIndex < urlList.length - 1) {
                                   currentIndex++;
                                   loadHls(urlList[currentIndex]);
@@ -146,7 +146,6 @@ export default function Player({ option, style, getInstance }) {
                                   setStatusMsg("Stream Offline");
                                   art.notice.show("All Servers Failed");
                               }
-                              break;
                           }
                       }
                   });
@@ -156,6 +155,15 @@ export default function Player({ option, style, getInstance }) {
                   video.src = currentUrl;
                   video.play();
                   setStatusMsg("");
+                  
+                  // Native Player Error Handling (Simple Retry)
+                  video.onerror = () => {
+                      if (currentIndex < urlList.length - 1) {
+                          currentIndex++;
+                          video.src = urlList[currentIndex];
+                          video.play();
+                      }
+                  };
               } 
               else {
                   art.notice.show = "HLS not supported!";
